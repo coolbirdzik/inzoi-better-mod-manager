@@ -45,7 +45,7 @@ Repository: [coolbirdzik/inzoi-better-mod-manager](https://github.com/coolbirdzi
 
 Đã triển khai: quét mod theo `mod_manifest.json`, thumbnail cục bộ nếu có, tìm kiếm/lọc, nhập thư mục hoặc ZIP vào thư viện riêng, tiếp nhận mod đã cài sau khi sao lưu, sửa tên/mô tả, bật/tắt bằng bản sao có đánh dấu quyền sở hữu, gỡ vào thư mục phục hồi, đọc và đăng ký liên kết NXM cho inZOI, tự tải/cài bản cập nhật đã ký rồi khởi động lại.
 
-Chưa hoàn tất: nhập 7z/RAR, legacy PAK/UE4SS, nhập dữ liệu Vortex cũ, kiểm thử toàn bộ luồng thao tác trên app thật và xác nhận bản macOS. Mod bên ngoài chỉ được bật/tắt, chỉnh sửa thông tin hoặc gỡ sau khi người dùng chọn Tiếp nhận quản lý; bản sao được giữ trong thư viện. Liên kết NXM được tiếp nhận ở cả lần mở app đầu tiên và khi app đã chạy.
+Chưa hoàn tất: nhập 7z/RAR, legacy PAK/UE4SS, nhập dữ liệu Vortex cũ, kiểm thử toàn bộ luồng thao tác trên app thật và kiểm tra giao diện macOS trực tiếp. Mod bên ngoài chỉ được bật/tắt, chỉnh sửa thông tin hoặc gỡ sau khi người dùng chọn Tiếp nhận quản lý; bản sao được giữ trong thư viện. Liên kết NXM được tiếp nhận ở cả lần mở app đầu tiên và khi app đã chạy.
 
 Khóa ký cập nhật được tạo cục bộ ngoài repository. Để phát hành từ GitHub Actions, thêm private key vào secret `TAURI_SIGNING_PRIVATE_KEY`; không commit private key. Public key được cấu hình trong `src-tauri/tauri.conf.json`. Workflow tạo bản nháp; bước xác minh tự động chỉ công bố khi đủ gói và tất cả chữ ký hợp lệ.
 
@@ -97,3 +97,7 @@ Tiếng Anh là mặc định, kể cả khi hệ điều hành đang dùng ngô
 Toàn bộ 106 mục giao diện, hộp xác nhận, nhãn trợ năng và thông báo thông thường dùng catalog chung ở `src/lib/locales`. Chi tiết lỗi do hệ điều hành, dịch vụ hoặc backend trả về vẫn được giữ nguyên để hỗ trợ chẩn đoán. Tên, tác giả và mô tả mod là nội dung của mod, không tự dịch. Khóa dịch thiếu sẽ quay về tiếng Anh.
 
 Kiểm tra: `npm run test:i18n` (đủ khóa và placeholder cho 10 ngôn ngữ). Kiểm tra giao diện chạy trên bản frontend đã build: `npm run build`, `npx playwright install chromium`, rồi `npm run test:ui`. Bộ kiểm tra xác nhận mặc định tiếng Anh, đổi Trung/Hàn tức thời và lưu lựa chọn qua lần tải lại. CI chạy cả hai bộ kiểm tra.
+
+## Xác minh bản 0.1.3
+
+Mã nguồn `83bd132`: [Verify desktop](https://github.com/coolbirdzik/inzoi-better-mod-manager/actions/runs/42296665839) thành công trên Windows và macOS; 30 bài kiểm tra Rust, 13 kiểm tra bản dịch và 7 kiểm tra giao diện qua. [Release](https://github.com/coolbirdzik/inzoi-better-mod-manager/actions/runs/42296676147) build thành công Windows x64 cùng macOS Intel/Apple Silicon. [Xác minh và công bố](https://github.com/coolbirdzik/inzoi-better-mod-manager/actions/runs/42298200068) thành công; [v0.1.3](https://github.com/coolbirdzik/inzoi-better-mod-manager/releases/tag/v0.1.3) đã công khai. Nguồn cập nhật `latest.json` trả phiên bản 0.1.3, gồm gói riêng `windows-x86_64-portable`.
