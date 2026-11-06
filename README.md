@@ -53,7 +53,7 @@ Khóa ký cập nhật được tạo cục bộ ngoài repository. Để phát 
 ## Xác minh trên Windows
 
 - Svelte/TypeScript: kiểm tra không có lỗi hoặc cảnh báo.
-- Rust: 23 bài kiểm tra bao gồm chu trình tiếp nhận → tắt → bật → gỡ, bảo toàn bản sao, từ chối sai quyền sở hữu, ZIP có đường dẫn thoát thư mục, UTF-8 BOM, UTF-16 ở hai thứ tự byte và tên trường manifest viết camelCase.
+- Rust: 25 bài kiểm tra bao gồm chu trình tiếp nhận → tắt → bật → gỡ, bảo toàn bản sao, từ chối sai quyền sở hữu, ZIP có đường dẫn thoát thư mục, UTF-8 BOM, UTF-16 ở hai thứ tự byte và tên trường manifest viết camelCase.
 - Đã mở bản Windows debug và quét thư mục mod thật; không thực hiện bật/tắt/gỡ mod thật trong quá trình thử giao diện.
 - GitHub Actions đã build thành công DMG macOS cho mã nguồn 4dc3923 và lưu artifact `desktop-macOS`. Chưa kiểm tra giao diện macOS trực tiếp. Các thay đổi sau commit đó cần lượt kiểm tra mới.
 
@@ -78,3 +78,5 @@ Workflow Release tạo bản nháp cho Windows x64, macOS Apple Silicon và macO
 Công cụ kiểm tra độc lập ở `tools/verify-release`, không chạy các bộ cài được tải xuống. Nếu thiếu gói, sai URL, sai phiên bản hoặc sai chữ ký, workflow giữ nguyên bản nháp.
 
 Bản nháp 0.1.1 không được công bố: kiểm tra kết nối cục bộ phát hiện thiếu khởi tạo TLS provider. Công cụ xác minh chặn bản này; bản sửa sẽ có phiên bản mới.
+
+Bản sửa 0.1.2 khởi tạo rõ TLS provider trước các client HTTPS. Các kiểm tra truyền tải HTTP cục bộ đã qua; kiểm tra HTTPS chỉ đọc đã kết nối API Nexus thật và xác nhận lỗi khóa không hợp lệ được trả về an toàn. Đây chưa phải kiểm thử tải bằng API key thật của người dùng.

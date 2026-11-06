@@ -1,3 +1,6 @@
+pub(crate) fn configure_tls() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
 use super::*;
 use std::{collections::HashMap, io::Write, time::Duration};
 #[derive(Clone)]
@@ -103,6 +106,7 @@ pub(crate) async fn download_nxm(
     app: tauri::AppHandle,
     state: tauri::State<'_, State>,
 ) -> Result<DownloadResult> {
+    configure_tls();
     if api_key.trim().is_empty() {
         return Err("Enter your Nexus API key in this session first".into());
     }
@@ -295,5 +299,119 @@ mod tests {
         assert!(trusted_mirror(
             &url::Url::parse("https://files.nexus-cdn.com/file.zip").unwrap()
         ));
+    }
+}
+
+#[cfg(test)]
+mod transport_tests {
+    use super::*;
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+    };
+    fn serve(response: Vec<u8>) -> (url::Url, std::sync::mpsc::Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut request = vec![];
+            let mut chunk = [0u8; 1024];
+            loop {
+                let n = socket.read(&mut chunk).unwrap();
+                if n == 0 {
+                    break;
+                }
+                request.extend_from_slice(&chunk[..n]);
+                if request.windows(4).any(|x| x == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let _ = tx.send(String::from_utf8_lossy(&request).into_owned());
+            socket.write_all(&response).unwrap();
+        });
+        (
+            url::Url::parse(&format!("http://{address}/test")).unwrap(),
+            rx,
+        )
+    }
+    #[test]
+    fn sends_api_auth_and_reads_json_over_actual_transport() {
+        configure_tls();
+        let body = b"{\"file_name\":\"Hair.zip\"}";
+        let mut response=format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",body.len()).into_bytes();
+        response.extend(body);
+        let (url, rx) = serve(response);
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let data = tauri::async_runtime::block_on(api_json(&client, url, "TEST_KEY_ONLY")).unwrap();
+        assert_eq!(data["file_name"], "Hair.zip");
+        let headers = rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .to_lowercase();
+        assert!(headers.contains("apikey: test_key_only"));
+        assert!(headers.contains("application-name: inzoi better mod manager"));
+    }
+    #[test]
+    fn api_failure_does_not_echo_response_secrets() {
+        configure_tls();
+        let body = b"TEST_KEY_ONLY echoed by server";
+        let mut response = format!(
+            "HTTP/1.1 403 Forbidden\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        response.extend(body);
+        let (url, _) = serve(response);
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let error =
+            tauri::async_runtime::block_on(api_json(&client, url, "TEST_KEY_ONLY")).unwrap_err();
+        assert!(error.contains("403"));
+        assert!(!error.contains("TEST_KEY_ONLY"));
+    }
+}
+
+#[cfg(test)]
+mod live_https_smoke {
+    use super::*;
+    #[test]
+    #[ignore = "Read-only HTTPS smoke check against Nexus; requires internet"]
+    fn nexus_https_initializes_and_rejects_invalid_key_safely() {
+        configure_tls();
+        let client = reqwest::Client::builder()
+            .https_only(true)
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(20))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        let endpoint =
+            url::Url::parse("https://api.nexusmods.com/v1/games/inzoi/mods/1/files/1.json")
+                .unwrap();
+        let result = tauri::async_runtime::block_on(api_json(
+            &client,
+            endpoint,
+            "INZOIMM_INVALID_SMOKE_KEY",
+        ));
+        let error = result.expect_err("A deliberately invalid API key should not authenticate");
+        assert!(
+            error.contains("HTTP 401") || error.contains("HTTP 403") || error.contains("HTTP 400"),
+            "Unexpected HTTPS result: {error}"
+        );
+        assert!(!error.contains("INZOIMM_INVALID_SMOKE_KEY"));
+        println!(
+            "Nexus HTTPS transport reached the API; invalid-key response was safely reported."
+        );
     }
 }

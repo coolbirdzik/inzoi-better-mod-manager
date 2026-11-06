@@ -687,6 +687,7 @@ fn register_nxm(app: tauri::AppHandle) -> Result<()> {
     app.deep_link().register("nxm").map_err(err)
 }
 pub fn run() {
+    nexus::configure_tls();
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, _| {
             for raw in args {
