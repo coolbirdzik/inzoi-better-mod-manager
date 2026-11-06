@@ -39,7 +39,7 @@ Dữ liệu ứng dụng được lưu trong thư mục app-data riêng. Quét m
 
 ## Phát hành
 
-Repository dự kiến: `coolbirdzik/inzoi-better-mod-manager`. Cập nhật yêu cầu khóa ký Tauri và bản GitHub Release chứa `latest.json` cùng các gói được ký. Build macOS phải chạy trên máy macOS hoặc GitHub Actions macOS; không thể xác nhận build macOS chỉ bằng kiểm tra Windows.
+Repository: [coolbirdzik/inzoi-better-mod-manager](https://github.com/coolbirdzik/inzoi-better-mod-manager). Cập nhật yêu cầu khóa ký Tauri và bản GitHub Release chứa `latest.json` cùng các gói được ký. Build macOS phải chạy trên máy macOS hoặc GitHub Actions macOS; không thể xác nhận build macOS chỉ bằng kiểm tra Windows.
 
 ## Tiến độ hiện tại
 
@@ -68,4 +68,4 @@ Việc tải có xác thực thật chưa được kiểm chứng bằng tài kh
 
 ### Build Windows hiện có
 
-Đã tạo bản cài NSIS **debug** tại `src-tauri/target/debug/bundle/nsis/inZOI Better Mod Manager_0.1.0_x64-setup.exe`. Đây là bản thử nghiệm; chưa phải release phát hành. Bản cài được tạo trước khi bổ sung luồng tải Nexus mới, nên cần build lại trước khi phân phối.
+Đã tạo bản cài NSIS **release** tại `src-tauri/target/release/bundle/nsis/inZOI Better Mod Manager_0.1.0_x64-setup.exe`, cùng chữ ký cập nhật `.exe.sig`. Chữ ký đã được kiểm tra với public key trong cấu hình app; thay đổi một byte của bộ cài làm việc kiểm tra thất bại. Bản release cục bộ chưa đồng nghĩa đã phát hành trên GitHub. Bản debug cũ vẫn nằm riêng trong `src-tauri/target/debug/bundle/nsis`.
