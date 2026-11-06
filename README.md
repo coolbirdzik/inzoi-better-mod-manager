@@ -76,3 +76,5 @@ Việc tải có xác thực thật chưa được kiểm chứng bằng tài kh
 Workflow Release tạo bản nháp cho Windows x64, macOS Apple Silicon và macOS Intel. Sau khi cả ba job thành công, workflow Verify and publish release tải các asset của bản nháp, kiểm tra phiên bản và đủ nền tảng trong `latest.json`, rồi xác minh chữ ký từng gói bằng public key trong cấu hình của tag. Chỉ khi tất cả kiểm tra qua, bản nháp mới được công bố và đánh dấu Latest để app có thể kiểm tra cập nhật.
 
 Công cụ kiểm tra độc lập ở `tools/verify-release`, không chạy các bộ cài được tải xuống. Nếu thiếu gói, sai URL, sai phiên bản hoặc sai chữ ký, workflow giữ nguyên bản nháp.
+
+Bản nháp 0.1.1 không được công bố: kiểm tra kết nối cục bộ phát hiện thiếu khởi tạo TLS provider. Công cụ xác minh chặn bản này; bản sửa sẽ có phiên bản mới.

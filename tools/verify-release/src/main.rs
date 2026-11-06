@@ -30,6 +30,12 @@ fn verify(config: &Path, manifest: &Path, assets: &Path, tag: &str) -> Result<us
         serde_json::from_slice(&fs::read(config).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
     let version = cfg["version"].as_str().ok_or("Config has no version")?;
+    if version == "0.1.1" {
+        return Err(
+            "Version 0.1.1 is withheld because its Nexus HTTPS client initialization is incomplete"
+                .into(),
+        );
+    }
     if tag != format!("v{version}") {
         return Err("Release tag does not match the signed build configuration".into());
     }
