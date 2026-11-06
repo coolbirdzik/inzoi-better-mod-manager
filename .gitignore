@@ -5,3 +5,5 @@ work/
 *.key
 .env
 .DS_Store
+
+**/target/

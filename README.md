@@ -69,3 +69,10 @@ Việc tải có xác thực thật chưa được kiểm chứng bằng tài kh
 ### Build Windows hiện có
 
 Đã tạo bản cài NSIS **release** tại `src-tauri/target/release/bundle/nsis/inZOI Better Mod Manager_0.1.0_x64-setup.exe`, cùng chữ ký cập nhật `.exe.sig`. Chữ ký đã được kiểm tra với public key trong cấu hình app; thay đổi một byte của bộ cài làm việc kiểm tra thất bại. Bản release cục bộ chưa đồng nghĩa đã phát hành trên GitHub. Bản debug cũ vẫn nằm riêng trong `src-tauri/target/debug/bundle/nsis`.
+
+
+### Công bố bản cập nhật
+
+Workflow Release tạo bản nháp cho Windows x64, macOS Apple Silicon và macOS Intel. Sau khi cả ba job thành công, workflow Verify and publish release tải các asset của bản nháp, kiểm tra phiên bản và đủ nền tảng trong `latest.json`, rồi xác minh chữ ký từng gói bằng public key trong cấu hình của tag. Chỉ khi tất cả kiểm tra qua, bản nháp mới được công bố và đánh dấu Latest để app có thể kiểm tra cập nhật.
+
+Công cụ kiểm tra độc lập ở `tools/verify-release`, không chạy các bộ cài được tải xuống. Nếu thiếu gói, sai URL, sai phiên bản hoặc sai chữ ký, workflow giữ nguyên bản nháp.

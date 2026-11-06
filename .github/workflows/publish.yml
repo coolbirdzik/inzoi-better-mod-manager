@@ -1,0 +1,53 @@
+name: Verify and publish release
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['release/verification-request.json']
+permissions:
+  contents: write
+jobs:
+  publish:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Determine release tag
+        id: release
+        env:
+          SOURCE_TAG: ${{ github.event.workflow_run.head_branch }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+        shell: bash
+        run: |
+          if [ -n "$SOURCE_TAG" ]; then
+            TAG="$SOURCE_TAG"
+          else
+            TAG="v$(node -p "require('./package.json').version")"
+          fi
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then exit 1; fi
+          if [ -n "$SOURCE_SHA" ] && [ "$(git rev-parse "$TAG^{commit}")" != "$SOURCE_SHA" ]; then
+            echo "::error::Release workflow source does not match the tag."
+            exit 1
+          fi
+          git show "$TAG:src-tauri/tauri.conf.json" > release-config.json
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+      - name: Download draft assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: gh release download "$RELEASE_TAG" --dir release-assets
+      - name: Verify all updater signatures
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: cargo run --locked --manifest-path tools/verify-release/Cargo.toml -- release-config.json release-assets/latest.json release-assets "$RELEASE_TAG"
+      - name: Publish verified release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: gh release edit "$RELEASE_TAG" --draft=false --latest
