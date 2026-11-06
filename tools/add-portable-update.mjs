@@ -1,0 +1,10 @@
+import fs from 'node:fs';
+import path from 'node:path';
+const [dir,configFile='src-tauri/tauri.conf.json']=process.argv.slice(2);
+const config=JSON.parse(fs.readFileSync(configFile,'utf8'));
+const file=`inZOI-Better-Mod-Manager_${config.version}_windows-x64-portable.zip`;
+if(!fs.existsSync(path.join(dir,file)))throw new Error('Missing portable ZIP');
+const signature=fs.readFileSync(path.join(dir,file+'.sig'),'utf8').trim();
+const latest=path.join(dir,'latest.json');const manifest=JSON.parse(fs.readFileSync(latest,'utf8'));
+manifest.platforms['windows-x86_64-portable']={signature,url:`https://github.com/coolbirdzik/inzoi-better-mod-manager/releases/download/v${config.version}/${file}`};
+fs.writeFileSync(latest,JSON.stringify(manifest,null,2)+'\n');

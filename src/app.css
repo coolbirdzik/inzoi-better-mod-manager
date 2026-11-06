@@ -3,3 +3,5 @@
 html,body,#app{height:100%;overflow:hidden}.shell{min-height:0}main{min-height:0}.workspace{overflow:hidden}.mod-list,.inspector{min-height:0}header,.page-title,footer{flex-shrink:0}.warnings{max-height:140px;overflow:auto;flex-shrink:0}
 
 .update-status{font-size:9px;color:#77717c;padding:0 12px 8px;line-height:1.5}
+
+select{font:inherit;color:inherit;background:#171719;border:1px solid #ffffff20;border-radius:6px;padding:10px;width:100%;margin-top:7px}select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}:lang(zh-CN){font-family:"Segoe UI","Microsoft YaHei",sans-serif}:lang(ko){font-family:"Segoe UI","Malgun Gothic",sans-serif}:lang(ja){font-family:"Segoe UI","Yu Gothic UI",sans-serif}.modal label select{margin-bottom:4px}

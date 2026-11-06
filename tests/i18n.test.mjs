@@ -1,0 +1,11 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {resolveLocale,translate,supportedLocales} from '../src/lib/i18n-core.mjs';
+const load=code=>JSON.parse(readFileSync(new URL(`../src/lib/locales/${code}.json`,import.meta.url),'utf8'));
+const en=load('en');
+const placeholders=text=>[...text.matchAll(/\{(\w+)\}/g)].map(x=>x[1]).sort();
+test('English is the default independently of the system locale',()=>{for(const input of [null,undefined,'','unsupported','constructor','__proto__'])assert.equal(resolveLocale(input),'en');for(const code of supportedLocales)assert.equal(resolveLocale(code),code);});
+for(const code of supportedLocales)test(`${code}: complete catalog, intact placeholders and rendered messages`,()=>{const catalog=load(code);assert.deepEqual(Object.keys(catalog).sort(),Object.keys(en).sort());for(const key of Object.keys(en)){assert.equal(typeof catalog[key],'string');assert.ok(catalog[key].trim(),`${code}.${key} is empty`);assert.deepEqual(placeholders(catalog[key]),placeholders(en[key]),`${code}.${key} has incompatible parameters`);const params=Object.fromEntries(placeholders(en[key]).map(name=>[name,`VALUE_${name}`]));assert.ok(!/\{\w+\}/.test(translate(catalog,key,params)),`${code}.${key} left an unresolved placeholder`);}if(code!=='en')assert.notEqual(catalog.settings,en.settings);});
+test('Missing translations fall back to English and user text stays literal',()=>{assert.equal(translate({},'allMods'),'All mods');assert.equal(translate(en,'adoptConfirm',{name:'<mod>&$1 {name}'}),'Back up “<mod>&$1 {name}” to the library and let this app manage its installed copy?');});
+test('App has no hard-coded Vietnamese interface copy and binds language selection',()=>{const app=readFileSync(new URL('../src/App.svelte',import.meta.url),'utf8');assert.ok(!/[À-ỹ]/u.test(app));assert.match(app,/setLanguage\(e.currentTarget.value\)/);const html=readFileSync(new URL('../index.html',import.meta.url),'utf8');assert.match(html,/lang="en"/);const state=readFileSync(new URL('../src/lib/i18n.svelte.ts',import.meta.url),'utf8');assert.match(state,/localStorage.setItem\(storageKey,language.code\)/);});

@@ -54,7 +54,12 @@ fn verify(config: &Path, manifest: &Path, assets: &Path, tag: &str) -> Result<us
     let platforms = data["platforms"]
         .as_object()
         .ok_or("No updater platforms")?;
-    for required in ["windows-x86_64", "darwin-aarch64", "darwin-x86_64"] {
+    for required in [
+        "windows-x86_64",
+        "windows-x86_64-portable",
+        "darwin-aarch64",
+        "darwin-x86_64",
+    ] {
         if !platforms.keys().any(|p| {
             p == required || p == &format!("{required}-nsis") || p == &format!("{required}-app")
         }) {
@@ -75,6 +80,16 @@ fn verify(config: &Path, manifest: &Path, assets: &Path, tag: &str) -> Result<us
             fs::read(assets.join(&name)).map_err(|e| format!("Missing asset {name}: {e}"))?;
         key.verify(&bytes, &signature, true)
             .map_err(|e| format!("Invalid {platform} signature: {e}"))?;
+        if signature
+            .trusted_comment()
+            .split('\t')
+            .find_map(|field| field.strip_prefix("version:"))
+            != Some(version)
+        {
+            return Err(format!(
+                "Missing or mismatched signed version for {platform}"
+            ));
+        }
         println!("Verified {platform}: {name} ({} bytes)", bytes.len());
     }
     Ok(platforms.len())

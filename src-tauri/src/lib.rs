@@ -1,3 +1,5 @@
+mod portable;
+pub use portable::apply_from_cli;
 mod nexus;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -688,6 +690,19 @@ fn register_nxm(app: tauri::AppHandle) -> Result<()> {
 }
 pub fn run() {
     nexus::configure_tls();
+    let mut context = tauri::generate_context!();
+    if let Some(root) = portable::root() {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        root.hash(&mut hasher);
+        context.config_mut().identifier = format!(
+            "com.coolbirdzik.inzoi-better-mod-manager.portable-{:x}",
+            hasher.finish()
+        );
+        context.config_mut().app.app_directories_override = Some(
+            tauri::utils::config::AppDirectoriesOverride::Root(root.join("data")),
+        );
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, _| {
             for raw in args {
@@ -706,7 +721,7 @@ pub fn run() {
             let dir = app.path().app_data_dir()?;
             fs::create_dir_all(&dir)?;
             let file = dir.join("library.json");
-            let store = if file.exists() {
+            let mut store: Store = if file.exists() {
                 serde_json::from_slice(&fs::read(&file)?)?
             } else {
                 let docs = app.path().document_dir()?;
@@ -718,6 +733,18 @@ pub fn run() {
                     mods: vec![],
                 }
             };
+            if portable::root().is_some() {
+                let location = dir.join("portable-location.json");
+                if let Ok(bytes) = fs::read(&location) {
+                    let previous: PathBuf = serde_json::from_slice(&bytes)?;
+                    if portable::relocate_library(&mut store, &previous, &dir) {
+                        let temp = file.with_extension("tmp");
+                        fs::write(&temp, serde_json::to_vec_pretty(&store)?)?;
+                        fs::rename(temp, &file)?;
+                    }
+                }
+                fs::write(location, serde_json::to_vec(&dir)?)?;
+            }
             let initial: Vec<_> = std::env::args()
                 .filter_map(|s| nexus::parse_request(&s).ok())
                 .collect();
@@ -752,9 +779,11 @@ pub fn run() {
             parse_nxm,
             pending_links,
             register_nxm,
-            nexus::download_nxm
+            nexus::download_nxm,
+            portable::is_portable,
+            portable::update_portable
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("Unable to start inZOI Better Mod Manager");
 }
 #[cfg(test)]

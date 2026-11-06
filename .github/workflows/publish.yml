@@ -42,6 +42,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: gh release download "$RELEASE_TAG" --dir release-assets
+      - name: Add portable updater entry
+        run: node tools/add-portable-update.mjs release-assets release-config.json
       - name: Verify all updater signatures
         env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
@@ -50,4 +52,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
-        run: gh release edit "$RELEASE_TAG" --draft=false --latest
+        run: |
+          gh release upload "$RELEASE_TAG" release-assets/latest.json --clobber
+          gh release edit "$RELEASE_TAG" --draft=false --latest

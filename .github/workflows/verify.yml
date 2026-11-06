@@ -22,7 +22,10 @@ jobs:
         with:
           workspaces: src-tauri -> target
       - run: npm ci
+      - run: npm run test:i18n
       - run: npm run build
+      - run: npx playwright install chromium
+      - run: npm run test:ui
       - run: cargo test --manifest-path src-tauri/Cargo.toml
       - run: npm run tauri -- build --bundles ${{ runner.os == 'Windows' && 'nsis' || 'dmg' }}
       - uses: actions/upload-artifact@v4

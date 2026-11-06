@@ -40,6 +40,7 @@ jobs:
         with:
           workspaces: src-tauri -> target
       - run: npm ci
+      - run: npm run test:i18n
       - run: cargo test --locked --manifest-path src-tauri/Cargo.toml
       - uses: tauri-apps/tauri-action@v0
         env:
@@ -49,7 +50,20 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: inZOI Better Mod Manager v__VERSION__
-          releaseBody: Desktop builds for Windows and macOS. See README for supported mod formats.
+          releaseBody: Windows portable ZIP and installer, macOS Apple Silicon and Intel. English by default with 10 interface languages. Updates download, install and restart automatically. See README for supported mod formats.
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }} --config '{"bundle":{"createUpdaterArtifacts":true}}'
+
+      - name: Package signed Windows portable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ./scripts/package-portable.ps1 -Sign
+          $version=(Get-Content package.json -Raw | ConvertFrom-Json).version
+          $zip="src-tauri/target/release/bundle/portable/inZOI-Better-Mod-Manager_${version}_windows-x64-portable.zip"
+          gh release upload "v$version" "$zip" "$zip.sig" --clobber
