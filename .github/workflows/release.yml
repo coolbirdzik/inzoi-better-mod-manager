@@ -24,6 +24,15 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Check updater signing configuration
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::Configure the repository secret TAURI_SIGNING_PRIVATE_KEY before releasing updates."
+            exit 1
+          fi
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || 'x86_64-pc-windows-msvc' }}
@@ -31,6 +40,7 @@ jobs:
         with:
           workspaces: src-tauri -> target
       - run: npm ci
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -14,8 +14,6 @@ type Result<T> = std::result::Result<T, String>;
 pub struct Settings {
     mods_dir: String,
     library_dir: String,
-    vortex_dir: String,
-    github_repo: String,
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Mod {
@@ -173,7 +171,10 @@ fn snapshot(app: tauri::AppHandle, state: tauri::State<State>) -> Result<Snapsho
     let (external, warnings) = scan(Path::new(&s.settings.mods_dir));
     let mut mods = s.mods.clone();
     for m in external {
-        if !mods.iter().any(|x| x.project == m.project && x.enabled) {
+        if !mods
+            .iter()
+            .any(|x| x.project.eq_ignore_ascii_case(&m.project) && x.enabled)
+        {
             mods.push(m);
         }
     }
@@ -250,10 +251,11 @@ fn import_folder_core(path: String, state: &State) -> Result<()> {
         return Err("The import contains duplicate ProjectName values".into());
     }
     let mut s = state.store.lock().map_err(err)?;
-    if mods
-        .iter()
-        .any(|m| s.mods.iter().any(|x| x.project == m.project))
-    {
+    if mods.iter().any(|m| {
+        s.mods
+            .iter()
+            .any(|x| x.project.eq_ignore_ascii_case(&m.project))
+    }) {
         return Err("One of these projects already exists in your library".into());
     }
     let library = PathBuf::from(&s.settings.library_dir);
@@ -367,14 +369,25 @@ fn toggle_mod_core(id: String, state: &State) -> Result<()> {
             );
         }
         fs::create_dir_all(target.parent().ok_or("Missing target parent")?).map_err(err)?;
-        let temp = target.with_file_name(format!(".inzoimm-{}", m.id));
-        if temp.exists() {
-            return Err("An incomplete deployment exists; inspect the game mod folder".into());
+        let root = PathBuf::from(&s.settings.mods_dir)
+            .canonicalize()
+            .map_err(err)?;
+        let staging = root
+            .parent()
+            .ok_or("Mod folder has no parent")?
+            .join(".inzoimm-staging");
+        fs::create_dir_all(&staging).map_err(err)?;
+        let temp = staging.join(uuid::Uuid::new_v4().to_string());
+        let prepared = (|| {
+            copy_tree(Path::new(&m.path), &temp)?;
+            enable_manifest(&temp)?;
+            fs::write(temp.join(".inzoimm-owner"), &m.id).map_err(err)?;
+            fs::rename(&temp, &target).map_err(err)
+        })();
+        if let Err(e) = prepared {
+            let _ = fs::remove_dir_all(&temp);
+            return Err(e);
         }
-        copy_tree(Path::new(&m.path), &temp)?;
-        enable_manifest(&temp)?;
-        fs::write(temp.join(".inzoimm-owner"), &m.id).map_err(err)?;
-        fs::rename(&temp, &target).map_err(err)?;
         s.mods[pos].enabled = true;
         if let Err(e) = write_store(&state, &s) {
             s.mods[pos].enabled = false;
@@ -504,7 +517,10 @@ fn adopt_mod_core(path: String, state: &State) -> Result<()> {
     let id = uuid::Uuid::new_v4().to_string();
     let mut m = read_mod(&source, id.clone(), false)?;
     m.managed = true;
-    if s.mods.iter().any(|x| x.project == m.project) {
+    if s.mods
+        .iter()
+        .any(|x| x.project.eq_ignore_ascii_case(&m.project))
+    {
         return Err("This project is already in your library".into());
     }
     let library = PathBuf::from(&s.settings.library_dir);
@@ -697,13 +713,6 @@ pub fn run() {
                     settings: Settings {
                         mods_dir: docs.join("inZOI/Mods").to_string_lossy().into_owned(),
                         library_dir: dir.join("library").to_string_lossy().into_owned(),
-                        vortex_dir: app
-                            .path()
-                            .home_dir()?
-                            .join("AppData/Roaming/Vortex")
-                            .to_string_lossy()
-                            .into_owned(),
-                        github_repo: "coolbirdzik/inzoi-better-mod-manager".into(),
                     },
                     mods: vec![],
                 }
@@ -844,8 +853,6 @@ mod lifecycle_tests {
                 settings: Settings {
                     mods_dir: game.to_string_lossy().into_owned(),
                     library_dir: root.join("library").to_string_lossy().into_owned(),
-                    vortex_dir: String::new(),
-                    github_repo: String::new(),
                 },
                 mods: vec![],
             }),
@@ -1046,6 +1053,54 @@ mod copied_external_tests {
             fs::read_dir(root.join("library/.trash")).unwrap().count(),
             1
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+#[cfg(test)]
+mod failure_rollback_tests {
+    use super::*;
+    #[test]
+    fn failed_adoption_restores_original_and_index() {
+        let (root, state, source) = super::lifecycle_tests::fixture();
+        fs::create_dir(&state.file).unwrap();
+        assert!(adopt_mod_core(source.to_string_lossy().into_owned(), &state).is_err());
+        assert!(source.join("payload.pak").exists());
+        assert!(!source.join(".inzoimm-owner").exists());
+        assert!(state.store.lock().unwrap().mods.is_empty());
+        assert_eq!(fs::read_dir(root.join("library")).unwrap().count(), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn failed_disable_restores_original_deployment() {
+        let (root, state, source) = super::lifecycle_tests::fixture();
+        adopt_mod_core(source.to_string_lossy().into_owned(), &state).unwrap();
+        let id = state.store.lock().unwrap().mods[0].id.clone();
+        fs::remove_file(&state.file).unwrap();
+        fs::create_dir(&state.file).unwrap();
+        assert!(toggle_mod_core(id, &state).is_err());
+        assert_eq!(fs::read(source.join("payload.pak")).unwrap(), [1, 2, 3, 4]);
+        assert!(state.store.lock().unwrap().mods[0].enabled);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn deployment_is_published_only_when_complete() {
+        let (root, state, source) = super::lifecycle_tests::fixture();
+        import_folder_core(source.to_string_lossy().into_owned(), &state).unwrap();
+        let id = state.store.lock().unwrap().mods[0].id.clone();
+        toggle_mod_core(id, &state).unwrap();
+        let target = root.join("game/Mods/Hair_ABC");
+        assert_eq!(fs::read(target.join("payload.pak")).unwrap(), [1, 2, 3, 4]);
+        assert_eq!(
+            fs::read_dir(root.join("game/.inzoimm-staging"))
+                .unwrap()
+                .count(),
+            0
+        );
+        assert!(fs::read_dir(root.join("game/Mods")).unwrap().all(|e| !e
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".inzoimm-")));
         fs::remove_dir_all(root).unwrap();
     }
 }

@@ -53,9 +53,9 @@ Khóa ký cập nhật được tạo cục bộ ngoài repository. Để phát 
 ## Xác minh trên Windows
 
 - Svelte/TypeScript: kiểm tra không có lỗi hoặc cảnh báo.
-- Rust: 20 bài kiểm tra bao gồm chu trình tiếp nhận → tắt → bật → gỡ, bảo toàn bản sao, từ chối sai quyền sở hữu, ZIP có đường dẫn thoát thư mục, UTF-8 BOM, UTF-16 ở hai thứ tự byte và tên trường manifest viết camelCase.
+- Rust: 23 bài kiểm tra bao gồm chu trình tiếp nhận → tắt → bật → gỡ, bảo toàn bản sao, từ chối sai quyền sở hữu, ZIP có đường dẫn thoát thư mục, UTF-8 BOM, UTF-16 ở hai thứ tự byte và tên trường manifest viết camelCase.
 - Đã mở bản Windows debug và quét thư mục mod thật; không thực hiện bật/tắt/gỡ mod thật trong quá trình thử giao diện.
-- Chưa có bằng chứng build hoặc chạy macOS từ CI; workflow không thay thế kết quả chạy thực tế.
+- GitHub Actions đã build thành công DMG macOS cho mã nguồn 4dc3923 và lưu artifact `desktop-macOS`. Chưa kiểm tra giao diện macOS trực tiếp. Các thay đổi sau commit đó cần lượt kiểm tra mới.
 
 
 ## Tải qua liên kết Nexus / Vortex
