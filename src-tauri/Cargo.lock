@@ -1820,6 +1820,8 @@ dependencies = [
 name = "inzoi-better-mod-manager"
 version = "0.1.0"
 dependencies = [
+ "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "tauri",

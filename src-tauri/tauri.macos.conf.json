@@ -1,0 +1,12 @@
+{
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "inzoimm",
+          "nxm"
+        ]
+      }
+    }
+  }
+}

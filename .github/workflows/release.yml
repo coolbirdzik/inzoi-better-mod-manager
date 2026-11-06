@@ -41,5 +41,5 @@ jobs:
           releaseName: inZOI Better Mod Manager v__VERSION__
           releaseBody: Desktop builds for Windows and macOS. See README for supported mod formats.
           releaseDraft: true
-          prerelease: true
+          prerelease: false
           args: ${{ matrix.args }} --config '{"bundle":{"createUpdaterArtifacts":true}}'
