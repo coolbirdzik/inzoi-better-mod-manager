@@ -1,6 +1,6 @@
 [package]
 name = "inzoi-better-mod-manager"
-version = "0.1.5"
+version = "0.1.6"
 description = "A focused inZOI mod library"
 authors = ["coolbirdzik"]
 edition = "2021"
