@@ -29,6 +29,13 @@ pub(crate) fn relocate_library(store: &mut Store, previous: &Path, current: &Pat
         return false;
     }
     for m in &mut store.mods {
+        if let Some(root) = &m.library_root {
+            if let Ok(rel) =
+                dunce::simplified(Path::new(root)).strip_prefix(dunce::simplified(&old))
+            {
+                m.library_root = Some(new.join(rel).to_string_lossy().into_owned());
+            }
+        }
         if let Ok(rel) = dunce::simplified(Path::new(&m.path)).strip_prefix(dunce::simplified(&old))
         {
             m.path = new.join(rel).to_string_lossy().into_owned();
@@ -250,8 +257,13 @@ mod tests {
             settings: Settings {
                 mods_dir: "game-mods".into(),
                 library_dir: previous.join("library").to_string_lossy().into_owned(),
+                scan_subfolders: true,
+                source_dirs: vec![],
+                downloads_dir: String::new(),
             },
             mods: vec![],
+            thumbnails: Default::default(),
+            tags: Default::default(),
         };
         assert!(relocate_library(&mut store, &previous, &current));
         assert_eq!(

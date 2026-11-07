@@ -1,6 +1,10 @@
 mod portable;
 pub use portable::apply_from_cli;
+mod download_storage;
+mod library;
+mod metadata;
 mod nexus;
+mod thumbnails;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -12,10 +16,58 @@ use tauri_plugin_deep_link::DeepLinkExt;
 use walkdir::WalkDir;
 
 type Result<T> = std::result::Result<T, String>;
+#[derive(Clone, Serialize)]
+pub struct SourceFolder {
+    path: String,
+    scan_subfolders: bool,
+}
+impl From<String> for SourceFolder {
+    fn from(path: String) -> Self {
+        Self {
+            path,
+            scan_subfolders: true,
+        }
+    }
+}
+impl<'de> Deserialize<'de> for SourceFolder {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum SavedSource {
+            Legacy(String),
+            Folder {
+                path: String,
+                #[serde(default = "default_scan_subfolders")]
+                scan_subfolders: bool,
+            },
+        }
+        Ok(match SavedSource::deserialize(deserializer)? {
+            SavedSource::Legacy(path) => path.into(),
+            SavedSource::Folder {
+                path,
+                scan_subfolders,
+            } => Self {
+                path,
+                scan_subfolders,
+            },
+        })
+    }
+}
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Settings {
     mods_dir: String,
     library_dir: String,
+    #[serde(default = "default_scan_subfolders")]
+    scan_subfolders: bool,
+    #[serde(default)]
+    source_dirs: Vec<SourceFolder>,
+    #[serde(default)]
+    downloads_dir: String,
+}
+fn default_scan_subfolders() -> bool {
+    true
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Mod {
@@ -32,11 +84,21 @@ pub struct Mod {
     project: String,
     #[serde(default)]
     deployed_path: Option<String>,
+    #[serde(default)]
+    library_root: Option<String>,
+    #[serde(default)]
+    metadata: std::collections::BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
+    tags: Vec<String>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct Store {
     settings: Settings,
     mods: Vec<Mod>,
+    #[serde(default)]
+    thumbnails: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    tags: std::collections::BTreeMap<String, Vec<String>>,
 }
 struct State {
     file: PathBuf,
@@ -140,9 +202,16 @@ fn read_mod(folder: &Path, id: String, managed: bool) -> Result<Mod> {
         source: field(&v, "Url"),
         project,
         deployed_path: None,
+        library_root: None,
+        metadata: metadata::read(folder, v),
+        tags: vec![],
     })
 }
+#[cfg(test)]
 fn scan(root: &Path) -> (Vec<Mod>, Vec<String>) {
+    scan_with_options(root, true)
+}
+fn scan_with_options(root: &Path, recursive: bool) -> (Vec<Mod>, Vec<String>) {
     let mut mods = vec![];
     let mut warnings = vec![];
     if !root.exists() {
@@ -151,7 +220,16 @@ fn scan(root: &Path) -> (Vec<Mod>, Vec<String>) {
             vec![format!("Mod folder does not exist: {}", root.display())],
         );
     }
-    for e in WalkDir::new(root).follow_links(false).max_depth(7) {
+    for e in WalkDir::new(root)
+        .follow_links(false)
+        .max_depth(if recursive { usize::MAX } else { 1 })
+        .into_iter()
+        .filter_entry(|entry| {
+            entry.depth() == 0
+                || (entry.file_name() != ".trash"
+                    && !entry.file_name().to_string_lossy().starts_with(".inzoimm-"))
+        })
+    {
         match e {
             Ok(e) if e.file_type().is_file() && e.file_name() == "mod_manifest.json" => {
                 let p = e.path().parent().unwrap();
@@ -167,21 +245,114 @@ fn scan(root: &Path) -> (Vec<Mod>, Vec<String>) {
     mods.sort_by_key(|m| m.name.to_lowercase());
     (mods, warnings)
 }
+fn index_managed_folder(store: &mut Store) -> Vec<String> {
+    let library = Path::new(&store.settings.library_dir);
+    if !library.exists() {
+        return vec![];
+    }
+    let root = match library.canonicalize() {
+        Ok(root) => root,
+        Err(e) => return vec![e.to_string()],
+    };
+    if let Ok(game) = Path::new(&store.settings.mods_dir).canonicalize() {
+        if root.starts_with(&game) || game.starts_with(&root) {
+            return vec!["Managed mods folder and game Mods folder must be separate".into()];
+        }
+    }
+    let (candidates, mut warnings) = scan_with_options(&root, store.settings.scan_subfolders);
+    let known: std::collections::HashSet<_> = store
+        .mods
+        .iter()
+        .filter_map(|m| Path::new(&m.path).canonicalize().ok())
+        .collect();
+    for mut candidate in candidates {
+        let path = match Path::new(&candidate.path).canonicalize() {
+            Ok(path) => path,
+            Err(e) => {
+                warnings.push(e.to_string());
+                continue;
+            }
+        };
+        if known.contains(&path) {
+            continue;
+        }
+        if !path.starts_with(&root) {
+            warnings.push(format!(
+                "Mod path is outside the managed folder: {}",
+                path.display()
+            ));
+            continue;
+        }
+        if store
+            .mods
+            .iter()
+            .any(|m| m.project.eq_ignore_ascii_case(&candidate.project))
+        {
+            warnings.push(format!(
+                "Duplicate managed project skipped: {} ({})",
+                candidate.project,
+                path.display()
+            ));
+            continue;
+        }
+        candidate.id = uuid::Uuid::new_v4().to_string();
+        candidate.managed = true;
+        candidate.enabled = false;
+        candidate.library_root = Some(root.to_string_lossy().into_owned());
+        store.mods.push(candidate);
+    }
+    warnings
+}
 #[tauri::command(async)]
 fn snapshot(app: tauri::AppHandle, state: tauri::State<State>) -> Result<Snapshot> {
-    let s = state.store.lock().map_err(err)?;
-    let (external, warnings) = scan(Path::new(&s.settings.mods_dir));
-    let mut mods = s.mods.clone();
-    for m in external {
-        if !mods
-            .iter()
-            .any(|x| x.project.eq_ignore_ascii_case(&m.project) && x.enabled)
-        {
-            mods.push(m);
+    let mut s = state.store.lock().map_err(err)?;
+    let old_mods = s.mods.clone();
+    let managed_warnings = index_managed_folder(&mut s);
+    if s.mods.len() != old_mods.len() {
+        if let Err(error) = write_store(&state, &s) {
+            s.mods = old_mods;
+            return Err(error);
+        }
+    }
+    let (mut mods, mut warnings) = library::catalogue(&s);
+    warnings.extend(managed_warnings);
+    if let Ok(local) = app.path().local_data_dir() {
+        let metadata = local.join("inZOI/User_data/88849/library.json");
+        if metadata.is_file() {
+            match thumbnails::from_game_library(&metadata) {
+                Ok(images) => thumbnails::apply(&mut mods, &images),
+                Err(error) => warnings.push(format!("Game thumbnail metadata: {error}")),
+            }
+            if let Ok(details) = metadata::from_game_library(&metadata) {
+                for m in &mut mods {
+                    if let Some(details) = details.get(&m.project.to_lowercase()) {
+                        m.metadata.insert("Game library".into(), details.clone());
+                    }
+                }
+            }
         }
     }
     for root in [&s.settings.mods_dir, &s.settings.library_dir] {
         let _ = app.asset_protocol_scope().allow_directory(root, true);
+    }
+    let _ = app
+        .asset_protocol_scope()
+        .allow_directory(nexus::downloads_root(&s.settings), true);
+    for root in &s.settings.source_dirs {
+        let _ = app.asset_protocol_scope().allow_directory(&root.path, true);
+    }
+    for root in s.mods.iter().filter_map(|m| m.library_root.as_ref()) {
+        let _ = app.asset_protocol_scope().allow_directory(root, true);
+    }
+    let thumbnail_dir = state.file.parent().ok_or("Missing app data folder")?;
+    for m in &mut mods {
+        if let Some(relative) = s.thumbnails.get(&m.project.to_lowercase()) {
+            let path = thumbnail_dir.join(relative);
+            if path.is_file() {
+                let _ = app.asset_protocol_scope().allow_file(&path);
+                m.thumbnail = Some(path.to_string_lossy().into_owned());
+            }
+        }
     }
     Ok(Snapshot {
         settings: s.settings.clone(),
@@ -189,28 +360,99 @@ fn snapshot(app: tauri::AppHandle, state: tauri::State<State>) -> Result<Snapsho
         warnings,
     })
 }
+fn set_mod_thumbnail_core(id: String, path: String, state: &State) -> Result<()> {
+    let mut s = state.store.lock().map_err(err)?;
+    let project = s
+        .mods
+        .iter()
+        .find(|m| m.id == id)
+        .map(|m| m.project.clone())
+        .or_else(|| {
+            library::scan_sources(&s.settings)
+                .0
+                .into_iter()
+                .find(|m| m.id == id)
+                .map(|m| m.project)
+        })
+        .ok_or("Mod no longer exists")?;
+    let source = Path::new(&path);
+    let extension = source
+        .extension()
+        .and_then(|v| v.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    if !["png", "jpg", "jpeg", "webp"].contains(&extension.as_str()) {
+        return Err("Choose a PNG, JPEG or WebP image".into());
+    }
+    let metadata = fs::metadata(source).map_err(err)?;
+    if !metadata.is_file() || metadata.len() > 20 * 1024 * 1024 {
+        return Err("Thumbnail must be an image file smaller than 20 MB".into());
+    }
+    let dir = state.file.parent().ok_or("Missing app data folder")?;
+    fs::create_dir_all(dir.join("thumbnails")).map_err(err)?;
+    let relative = format!("thumbnails/{}.{}", uuid::Uuid::new_v4(), extension);
+    let target = dir.join(&relative);
+    fs::copy(source, &target).map_err(err)?;
+    let key = project.to_lowercase();
+    let previous = s.thumbnails.insert(key.clone(), relative);
+    if let Err(e) = write_store(state, &s) {
+        if let Some(previous) = previous {
+            s.thumbnails.insert(key, previous);
+        } else {
+            s.thumbnails.remove(&key);
+        }
+        let _ = fs::remove_file(target);
+        return Err(e);
+    }
+    if let Some(previous) = previous {
+        let _ = fs::remove_file(dir.join(previous));
+    }
+    Ok(())
+}
+#[tauri::command(async)]
+fn set_mod_thumbnail(id: String, path: String, state: tauri::State<State>) -> Result<()> {
+    set_mod_thumbnail_core(id, path, &state)
+}
 #[tauri::command(async)]
 fn save_settings(settings: Settings, state: tauri::State<State>) -> Result<()> {
+    save_settings_core(settings, &state)
+}
+fn save_settings_core(settings: Settings, state: &State) -> Result<()> {
+    library::validate_sources(&settings)?;
     if !Path::new(&settings.mods_dir).is_absolute()
         || !Path::new(&settings.library_dir).is_absolute()
     {
         return Err("Use absolute folder paths".into());
     }
     let mut s = state.store.lock().map_err(err)?;
-    if !s.mods.is_empty() && settings.library_dir != s.settings.library_dir {
-        return Err("Library relocation requires exporting installed mods first".into());
+    let library = PathBuf::from(&settings.library_dir);
+    let game = PathBuf::from(&settings.mods_dir);
+    let resolved_library = library.canonicalize().unwrap_or(library);
+    let resolved_game = game.canonicalize().unwrap_or(game);
+    if resolved_library.starts_with(&resolved_game) || resolved_game.starts_with(&resolved_library)
+    {
+        return Err("Managed mods folder and game Mods folder must be separate".into());
     }
     if s.mods.iter().any(|m| m.enabled) && settings.mods_dir != s.settings.mods_dir {
         return Err("Disable managed mods before changing the game mod folder".into());
     }
     let old = s.settings.clone();
     let old_mods = s.mods.clone();
+    if s.settings.library_dir != settings.library_dir {
+        let previous_root = s.settings.library_dir.clone();
+        for m in &mut s.mods {
+            if m.library_root.is_none() {
+                m.library_root = Some(previous_root.clone());
+            }
+        }
+    }
     if s.settings.mods_dir != settings.mods_dir {
         for m in &mut s.mods {
             m.deployed_path = None;
         }
     }
     s.settings = settings;
+    index_managed_folder(&mut s);
     if let Err(e) = write_store(&state, &s) {
         s.settings = old;
         s.mods = old_mods;
@@ -235,11 +477,22 @@ fn copy_tree(src: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 fn import_folder_core(path: String, state: &State) -> Result<()> {
+    import_folder_with_options(path, true, state)
+}
+fn import_folder_with_options(path: String, recursive: bool, state: &State) -> Result<()> {
+    import_folder_to_library(path, recursive, state, None)
+}
+fn import_folder_to_library(
+    path: String,
+    recursive: bool,
+    state: &State,
+    destination: Option<(PathBuf, PathBuf)>,
+) -> Result<()> {
     let src = PathBuf::from(&path).canonicalize().map_err(err)?;
     if !src.is_dir() {
         return Err("Choose a folder containing mod_manifest.json".into());
     }
-    let (mods, _) = scan(&src);
+    let (mods, _) = scan_with_options(&src, recursive);
     if mods.is_empty() {
         return Err(
             "No inZOI mod_manifest.json found. Legacy PAK mods are not yet supported.".into(),
@@ -253,32 +506,94 @@ fn import_folder_core(path: String, state: &State) -> Result<()> {
         return Err("The import contains duplicate ProjectName values".into());
     }
     let mut s = state.store.lock().map_err(err)?;
-    if mods.iter().any(|m| {
-        s.mods
-            .iter()
-            .any(|x| x.project.eq_ignore_ascii_case(&m.project))
-    }) {
+    if destination.is_none()
+        && mods.iter().any(|m| {
+            s.mods
+                .iter()
+                .any(|x| x.project.eq_ignore_ascii_case(&m.project))
+        })
+    {
         return Err("One of these projects already exists in your library".into());
     }
-    let library = PathBuf::from(&s.settings.library_dir);
+    let library = destination
+        .as_ref()
+        .map(|(folder, _)| folder.clone())
+        .unwrap_or_else(|| PathBuf::from(&s.settings.library_dir));
+    let managed_root = destination
+        .as_ref()
+        .map(|(_, root)| root.canonicalize().map_err(err))
+        .transpose()?;
     fs::create_dir_all(&library).map_err(err)?;
     let library = library.canonicalize().map_err(err)?;
+    if managed_root
+        .as_ref()
+        .is_some_and(|root| !library.starts_with(root))
+    {
+        return Err("Download folder containment check failed".into());
+    }
     if library.starts_with(&src) {
         return Err("Import source must not contain the library".into());
     }
-    let mut added = vec![];
+    let mut planned = vec![];
     for m in mods {
         let id = uuid::Uuid::new_v4().to_string();
-        let target = library.join(&id);
-        if let Err(e) = copy_tree(Path::new(&m.path), &target) {
-            let _ = fs::remove_dir_all(&target);
+        let target = library.join(if destination.is_some() {
+            &m.project
+        } else {
+            &id
+        });
+        if destination.is_some() {
+            if let Some(known) = s
+                .mods
+                .iter()
+                .find(|known| library::same_path(&known.path, &target.to_string_lossy()))
+            {
+                let current = read_mod(&target, known.id.clone(), true)?;
+                if current.project.eq_ignore_ascii_case(&known.project) {
+                    continue;
+                }
+                return Err(
+                    "Existing managed folder has a different ProjectName; it was kept".into(),
+                );
+            }
+        }
+        if target.exists() {
+            return Err(format!(
+                "A folder already exists at {}; it was not overwritten",
+                target.display()
+            ));
+        }
+        planned.push((m, id, target));
+    }
+    if planned.is_empty() {
+        return Ok(());
+    }
+    let mut added = vec![];
+    for (m, id, target) in planned {
+        if let Err(error) = fs::create_dir(&target) {
             for m in &added {
                 let m: &Mod = m;
                 let _ = fs::remove_dir_all(&m.path);
             }
-            return Err(e);
+            return Err(err(error));
+        }
+        let prepared =
+            copy_tree(Path::new(&m.path), &target).and_then(|_| read_mod(&target, id, true));
+        let mut m = match prepared {
+            Ok(m) => m,
+            Err(error) => {
+                let _ = fs::remove_dir_all(&target);
+                for m in &added {
+                    let m: &Mod = m;
+                    let _ = fs::remove_dir_all(&m.path);
+                }
+                return Err(error);
+            }
         };
-        added.push(read_mod(&target, id, true)?);
+        if let Some(root) = &managed_root {
+            m.library_root = Some(root.to_string_lossy().into_owned());
+        }
+        added.push(m);
     }
     let old = s.mods.clone();
     s.mods.extend(added.clone());
@@ -411,13 +726,25 @@ fn remove_mod_core(id: String, state: &State) -> Result<()> {
         return Err("Disable this mod before removing it".into());
     }
     let source = PathBuf::from(&m.path).canonicalize().map_err(err)?;
-    let root = PathBuf::from(&s.settings.library_dir)
+    let root = PathBuf::from(m.library_root.as_ref().unwrap_or(&s.settings.library_dir))
         .canonicalize()
         .map_err(err)?;
-    if source.parent() != Some(root.as_path())
-        || source.file_name().and_then(|s| s.to_str()) != Some(m.id.as_str())
+    let indexed = m.library_root.is_some();
+    if !source.starts_with(&root)
+        || source == root
+        || (!indexed
+            && (source.parent() != Some(root.as_path())
+                || source.file_name().and_then(|s| s.to_str()) != Some(m.id.as_str())))
     {
         return Err("Library containment check failed".into());
+    }
+    if s.mods.iter().any(|other| {
+        other.id != m.id
+            && Path::new(&other.path)
+                .canonicalize()
+                .is_ok_and(|path| path.starts_with(&source))
+    }) {
+        return Err("This folder contains another managed mod; remove the nested mod first".into());
     }
     let trash = root.join(".trash");
     fs::create_dir_all(&trash).map_err(err)?;
@@ -493,8 +820,12 @@ fn deployment_target(settings: &Settings, m: &Mod) -> Result<PathBuf> {
     Ok(target)
 }
 #[tauri::command(async)]
-fn import_folder(path: String, state: tauri::State<State>) -> Result<()> {
-    import_folder_core(path, &state)
+fn import_folder(
+    path: String,
+    scan_subfolders: Option<bool>,
+    state: tauri::State<State>,
+) -> Result<()> {
+    import_folder_with_options(path, scan_subfolders.unwrap_or(true), &state)
 }
 #[tauri::command(async)]
 fn toggle_mod(id: String, state: tauri::State<State>) -> Result<()> {
@@ -615,6 +946,25 @@ fn extract_zip(source: &Path, dest: &Path) -> Result<()> {
 }
 #[tauri::command(async)]
 fn import_zip(path: String, state: tauri::State<State>) -> Result<()> {
+    import_zip_core(&path, &state)
+}
+fn import_zip_core(path: &str, state: &State) -> Result<()> {
+    import_archive(path, state, None)
+}
+#[tauri::command(async)]
+fn import_download(path: String, state: tauri::State<State>) -> Result<()> {
+    import_download_core(&path, &state)
+}
+fn import_download_core(path: &str, state: &State) -> Result<()> {
+    let archive = Path::new(path).canonicalize().map_err(err)?;
+    let destination = metadata::download_destination(&archive)?;
+    import_archive(&archive.to_string_lossy(), state, Some(destination))
+}
+fn import_archive(
+    path: &str,
+    state: &State,
+    destination: Option<(PathBuf, PathBuf)>,
+) -> Result<()> {
     let temp = state
         .file
         .parent()
@@ -622,8 +972,16 @@ fn import_zip(path: String, state: tauri::State<State>) -> Result<()> {
         .join("imports")
         .join(uuid::Uuid::new_v4().to_string());
     fs::create_dir_all(&temp).map_err(err)?;
-    let result = extract_zip(Path::new(&path), &temp)
-        .and_then(|_| import_folder_core(temp.to_string_lossy().into_owned(), &state));
+    let result = extract_zip(Path::new(path), &temp)
+        .and_then(|_| metadata::attach_download(Path::new(path), &temp))
+        .and_then(|_| {
+            import_folder_to_library(
+                temp.to_string_lossy().into_owned(),
+                true,
+                state,
+                destination,
+            )
+        });
     let cleanup = fs::remove_dir_all(&temp).map_err(err);
     result.and(cleanup)
 }
@@ -729,8 +1087,13 @@ pub fn run() {
                     settings: Settings {
                         mods_dir: docs.join("inZOI/Mods").to_string_lossy().into_owned(),
                         library_dir: dir.join("library").to_string_lossy().into_owned(),
+                        scan_subfolders: true,
+                        source_dirs: vec![],
+                        downloads_dir: String::new(),
                     },
                     mods: vec![],
+                    thumbnails: Default::default(),
+                    tags: Default::default(),
                 }
             };
             if portable::root().is_some() {
@@ -769,9 +1132,12 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             snapshot,
+            set_mod_thumbnail,
+            library::set_mod_tags,
             save_settings,
             import_folder,
             import_zip,
+            import_download,
             adopt_mod,
             edit_mod,
             toggle_mod,
@@ -780,12 +1146,175 @@ pub fn run() {
             pending_links,
             register_nxm,
             nexus::download_nxm,
+            nexus::cancel_nxm,
             portable::is_portable,
             portable::update_portable
         ])
         .run(context)
         .expect("Unable to start inZOI Better Mod Manager");
 }
+#[cfg(test)]
+mod managed_folder_tests {
+    use super::*;
+
+    fn mod_folder(path: &Path, project: &str) {
+        fs::create_dir_all(path).unwrap();
+        fs::write(
+            path.join("mod_manifest.json"),
+            serde_json::to_vec(&serde_json::json!({"ProjectName":project})).unwrap(),
+        )
+        .unwrap();
+        fs::write(path.join("payload.pak"), b"original-payload").unwrap();
+    }
+
+    #[test]
+    fn selected_managed_folder_scans_in_place_with_persistent_ids_and_recoverable_removal() {
+        let (root, state, _) = crate::lifecycle_tests::fixture();
+        let library = root.join("selected");
+        let source = library.join("category/deep/HairLibrary");
+        mod_folder(&source, "HairLibrary");
+        let mut settings = state.store.lock().unwrap().settings.clone();
+        settings.library_dir = library.to_string_lossy().into_owned();
+        settings.scan_subfolders = false;
+        save_settings_core(settings.clone(), &state).unwrap();
+        assert!(state.store.lock().unwrap().mods.is_empty());
+        settings.scan_subfolders = true;
+        save_settings_core(settings.clone(), &state).unwrap();
+        let first = state.store.lock().unwrap().mods[0].clone();
+        assert!(first.managed);
+        assert!(!first.enabled);
+        assert_eq!(
+            Path::new(&first.path).canonicalize().unwrap(),
+            source.canonicalize().unwrap()
+        );
+        assert_eq!(fs::read_dir(&library).unwrap().count(), 1);
+        save_settings_core(settings, &state).unwrap();
+        assert_eq!(state.store.lock().unwrap().mods.len(), 1);
+        assert_eq!(state.store.lock().unwrap().mods[0].id, first.id);
+        toggle_mod_core(first.id.clone(), &state).unwrap();
+        toggle_mod_core(first.id.clone(), &state).unwrap();
+        assert_eq!(
+            fs::read(source.join("payload.pak")).unwrap(),
+            b"original-payload"
+        );
+        remove_mod_core(first.id, &state).unwrap();
+        assert!(!source.exists());
+        let trash = fs::read_dir(library.join(".trash"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        assert_eq!(
+            fs::read(trash.join("payload.pak")).unwrap(),
+            b"original-payload"
+        );
+        let mut store = state.store.lock().unwrap();
+        assert!(index_managed_folder(&mut store).is_empty());
+        assert!(store.mods.is_empty());
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn choosing_another_managed_folder_preserves_existing_library_and_operations() {
+        let (root, state, original) = crate::lifecycle_tests::fixture();
+        import_folder_core(original.to_string_lossy().into_owned(), &state).unwrap();
+        let old = state.store.lock().unwrap().mods[0].clone();
+        let library = root.join("selected");
+        mod_folder(&library.join("NewMod"), "NewMod");
+        let mut settings = state.store.lock().unwrap().settings.clone();
+        settings.library_dir = library.to_string_lossy().into_owned();
+        save_settings_core(settings, &state).unwrap();
+        assert_eq!(state.store.lock().unwrap().mods.len(), 2);
+        assert!(Path::new(&old.path).join("payload.pak").exists());
+        remove_mod_core(old.id, &state).unwrap();
+        assert!(original.join("payload.pak").exists());
+        assert!(library.join("NewMod/payload.pak").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_settings_save_rolls_back_index_without_touching_selected_mods() {
+        let (root, state, original) = crate::lifecycle_tests::fixture();
+        let library = root.join("selected");
+        mod_folder(&library.join("NewMod"), "NewMod");
+        let mut settings = state.store.lock().unwrap().settings.clone();
+        settings.library_dir = library.to_string_lossy().into_owned();
+        fs::create_dir(&state.file).unwrap();
+        assert!(save_settings_core(settings, &state).is_err());
+        let store = state.store.lock().unwrap();
+        assert!(store.mods.is_empty());
+        assert_eq!(Path::new(&store.settings.library_dir), root.join("library"));
+        assert!(library.join("NewMod/payload.pak").exists());
+        assert!(original.join("payload.pak").exists());
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod thumbnail_tests {
+    use super::*;
+
+    #[test]
+    fn custom_thumbnail_survives_adoption_and_replacement_without_editing_game() {
+        let (root, state, source) = crate::lifecycle_tests::fixture();
+        let image = root.join("preview.PNG");
+        fs::write(&image, b"test-image").unwrap();
+        let manifest = fs::read(source.join("mod_manifest.json")).unwrap();
+        let id = scan(Path::new(&state.store.lock().unwrap().settings.mods_dir)).0[0]
+            .id
+            .clone();
+        set_mod_thumbnail_core(id, image.to_string_lossy().into_owned(), &state).unwrap();
+        let previous = state.store.lock().unwrap().thumbnails["hair_abc"].clone();
+        assert_eq!(fs::read(root.join(&previous)).unwrap(), b"test-image");
+        assert_eq!(
+            fs::read(source.join("mod_manifest.json")).unwrap(),
+            manifest
+        );
+        assert!(!source.join("preview.PNG").exists());
+        adopt_mod_core(source.to_string_lossy().into_owned(), &state).unwrap();
+        let id = state.store.lock().unwrap().mods[0].id.clone();
+        set_mod_thumbnail_core(id, image.to_string_lossy().into_owned(), &state).unwrap();
+        let saved: Store = serde_json::from_slice(&fs::read(&state.file).unwrap()).unwrap();
+        assert!(root.join(&saved.thumbnails["hair_abc"]).is_file());
+        assert!(!root.join(previous).exists());
+        assert!(Path::new(&saved.thumbnails["hair_abc"]).is_relative());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn invalid_thumbnail_and_failed_save_preserve_previous_state() {
+        let (root, state, source) = crate::lifecycle_tests::fixture();
+        let id = scan(Path::new(&state.store.lock().unwrap().settings.mods_dir)).0[0]
+            .id
+            .clone();
+        let image = root.join("preview.png");
+        fs::write(&image, b"test-image").unwrap();
+        assert!(set_mod_thumbnail_core(
+            "missing".into(),
+            image.to_string_lossy().into_owned(),
+            &state
+        )
+        .is_err());
+        assert!(set_mod_thumbnail_core(
+            id.clone(),
+            source
+                .join("mod_manifest.json")
+                .to_string_lossy()
+                .into_owned(),
+            &state
+        )
+        .is_err());
+        fs::create_dir(&state.file).unwrap();
+        assert!(set_mod_thumbnail_core(id, image.to_string_lossy().into_owned(), &state).is_err());
+        assert!(state.store.lock().unwrap().thumbnails.is_empty());
+        assert_eq!(fs::read_dir(root.join("thumbnails")).unwrap().count(), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -813,6 +1342,64 @@ mod tests {
 #[cfg(test)]
 mod filesystem_tests {
     use super::*;
+    #[test]
+    fn scan_option_excludes_nested_mods_and_supports_deep_folders() {
+        let root = std::env::temp_dir().join(format!("inzoimm-scan-{}", uuid::Uuid::new_v4()));
+        let nested = root.join("one/two/three/four/five/six/seven/eight/DeepMod");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(
+            root.join("mod_manifest.json"),
+            br#"{"ProjectName":"RootMod"}"#,
+        )
+        .unwrap();
+        fs::write(
+            nested.join("mod_manifest.json"),
+            br#"{"ProjectName":"DeepMod"}"#,
+        )
+        .unwrap();
+        let (shallow, warnings) = scan_with_options(&root, false);
+        assert!(warnings.is_empty());
+        assert_eq!(shallow.len(), 1);
+        assert_eq!(shallow[0].project, "RootMod");
+        let (recursive, warnings) = scan_with_options(&root, true);
+        assert!(warnings.is_empty());
+        assert_eq!(recursive.len(), 2);
+        assert!(recursive.iter().any(|m| m.project == "DeepMod"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn scan_preference_defaults_on_for_old_settings_and_round_trips_off() {
+        let mut settings: Settings =
+            serde_json::from_str(r#"{"mods_dir":"game","library_dir":"library"}"#).unwrap();
+        assert!(settings.scan_subfolders);
+        settings.scan_subfolders = false;
+        let saved = serde_json::to_vec(&settings).unwrap();
+        assert!(
+            !serde_json::from_slice::<Settings>(&saved)
+                .unwrap()
+                .scan_subfolders
+        );
+    }
+
+    #[test]
+    fn folder_import_honors_scan_option_without_copying_unselected_children() {
+        let (root, state, source) = crate::lifecycle_tests::fixture();
+        let selected = root.join("game");
+        assert!(
+            import_folder_with_options(selected.to_string_lossy().into_owned(), false, &state)
+                .is_err()
+        );
+        assert!(state.store.lock().unwrap().mods.is_empty());
+        import_folder_with_options(selected.to_string_lossy().into_owned(), true, &state).unwrap();
+        let s = state.store.lock().unwrap();
+        assert_eq!(s.mods.len(), 1);
+        assert!(Path::new(&s.mods[0].path).join("payload.pak").exists());
+        assert!(source.join("payload.pak").exists());
+        drop(s);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn discovers_nested_mods_without_writing_game_files() {
         let root = std::env::temp_dir().join(format!("inzoimm-test-{}", uuid::Uuid::new_v4()));
@@ -883,8 +1470,13 @@ mod lifecycle_tests {
                 settings: Settings {
                     mods_dir: game.to_string_lossy().into_owned(),
                     library_dir: root.join("library").to_string_lossy().into_owned(),
+                    scan_subfolders: true,
+                    source_dirs: vec![],
+                    downloads_dir: String::new(),
                 },
                 mods: vec![],
+                thumbnails: Default::default(),
+                tags: Default::default(),
             }),
         };
         (root, state, source)
