@@ -35,6 +35,12 @@
       "dmg",
       "app"
     ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "installerHooks": "windows/installer-hooks.nsh"
+      }
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -57,7 +63,7 @@
         "https://github.com/coolbirdzik/inzoi-better-mod-manager/releases/latest/download/latest.json"
       ],
       "windows": {
-        "installMode": "quiet"
+        "installMode": "passive"
       },
       "requireSignedVersion": true
     }

@@ -89,6 +89,10 @@ The artifact collector and manifest generator live in [scripts/release-artifacts
 
 ## Local builds and validation
 
+Windows setup uses `currentUser` installation and app updates use `passive` mode. Keep the permission hook in `src-tauri/windows/installer-hooks.nsh`: installations in protected folders need UAC elevation before files are copied. The elevated setup preserves the destination and updater restart arguments, and stops if permission is still denied. Users with an older updater stuck on permissions should run the fixed setup manually once.
+
+After building Windows setup, run `./scripts/test-installer-hooks.ps1`. It compiles an isolated NSIS harness and tests writable and denied destinations without changing the installed app or opening UAC. The Windows bundle job runs it too. A real UAC approval/cancellation and update between signed releases still require an interactive smoke test.
+
 ```sh
 pnpm install --frozen-lockfile
 pnpm run test:release

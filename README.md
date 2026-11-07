@@ -59,6 +59,8 @@ Downloads default to `Downloads` inside the managed folder. Change the destinati
 
 **Check mod updates** is user initiated. It checks only mods with recognized Nexus/CurseForge provenance and records outcomes under **View log**. Unknown variants are sent for manual review rather than choosing a file by its ID alone. Compatible updates retain the old version, tags and enabled/disabled state. Source API access and the author's file layout affect what can be updated automatically.
 
+**Windows app updates:** the setup installs for the current user by default. App updates show installation progress and restart the app when finished. When setup cannot write to the installation folder, it requests administrator permission through Windows UAC and continues in the same location. The app itself does not need to run as administrator. If an older build gets stuck updating, install the fixed setup manually once.
+
 The installed app stores its catalog under its app-data directory. Windows portable builds use the adjacent `data` folder. Removal uses `.trash` and game recovery folders such as `.inzoimm-disabled`; these are recovery copies, not an independent backup. Scanning alone reads source files; enabling, disabling, editing or removing a selected mod changes files.
 
 ## Screenshots

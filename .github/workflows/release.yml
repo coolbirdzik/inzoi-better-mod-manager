@@ -119,6 +119,10 @@ jobs:
           else
             pnpm run tauri build ${{ matrix.args }}
           fi
+      - name: Test Windows installer permission hooks
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/test-installer-hooks.ps1
       - name: Package Windows portable
         if: runner.os == 'Windows'
         shell: pwsh
