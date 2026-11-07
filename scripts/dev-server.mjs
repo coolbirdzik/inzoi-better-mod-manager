@@ -6,7 +6,7 @@ import {DEV_HOST, DEV_PORT, DEV_ID_PATH} from './dev-config.mjs';
 
 const project = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const identity = root => {
- const path = realpathSync(root);
+ const path = realpathSync.native(root);
  return process.platform === 'win32' ? path.toLowerCase() : path;
 };
 async function reuseServer(url, id, port) {
@@ -27,6 +27,9 @@ async function reuseServer(url, id, port) {
 }
 
 export async function startDevServer({root = project, port = DEV_PORT} = {}) {
+ // Expand Windows 8.3 aliases such as RUNNER~1 before Vite builds its file
+ // requests and allow list. Vite's strict file serving rejects paths with '~'.
+ root = realpathSync.native(root);
  const url = `http://${DEV_HOST}:${port}`;
  const id = identity(root);
  if (await reuseServer(url, id, port)) return null;
