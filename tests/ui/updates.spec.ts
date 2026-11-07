@@ -4,7 +4,7 @@ async function mockDesktop(page:Page,portable=false,fail=false){
   const w=window as any;w.isTauri=true;w.calls=[];let id=0;
   w.__TAURI_INTERNALS__={transformCallback:()=>++id,invoke:async(cmd:string,args:any)=>{
    w.calls.push({cmd,args});
-   if(cmd==='snapshot')return {mods:[],settings:{mods_dir:'C:/test/Mods',library_dir:'C:/test/library'}};
+   if(cmd==='snapshot')return {mods:[],settings:{mods_dir:'C:/test/Mods',library_dir:'C:/test/library'},warnings:[]};
    if(cmd==='pending_links')return w.pending??[];
    if(cmd==='is_portable')return portable;
    if(cmd==='update_portable')return false;

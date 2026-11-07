@@ -8,8 +8,20 @@ const FILE_RECORD: &str = ".inzoimm-nexus.json";
 fn json(path: &Path) -> Result<serde_json::Value> {
     manifest_value(&metadata::read_limited(path, 2 * 1024 * 1024)?)
 }
-fn mod_matches(record: &serde_json::Value, id: u64) -> bool {
-    record["game"] == "inzoi" && record["mod_id"].as_u64() == Some(id)
+fn provider(record: &serde_json::Value) -> &str {
+    record["provider"].as_str().unwrap_or("nexus")
+}
+fn mod_matches(record: &serde_json::Value, id: u64, expected_provider: &str) -> bool {
+    record["game"] == "inzoi"
+        && record["mod_id"].as_u64() == Some(id)
+        && provider(record) == expected_provider
+}
+fn file_record(provider: &str) -> &str {
+    if provider == "curseforge" {
+        ".inzoimm-curseforge.json"
+    } else {
+        FILE_RECORD
+    }
 }
 fn safe_name(raw: &str) -> String {
     let cleaned: String = raw
@@ -32,7 +44,7 @@ fn safe_name(raw: &str) -> String {
     }
 }
 
-pub(crate) fn find_mod(root: &Path, id: u64) -> Result<Option<PathBuf>> {
+fn find_mod_for(root: &Path, id: u64, provider: &str) -> Result<Option<PathBuf>> {
     if !root.exists() {
         return Ok(None);
     }
@@ -47,7 +59,7 @@ pub(crate) fn find_mod(root: &Path, id: u64) -> Result<Option<PathBuf>> {
         let expected_name = entry
             .file_name()
             .to_string_lossy()
-            .ends_with(&format!(" [nexus-{id}]"));
+            .ends_with(&format!(" [{provider}-{id}]"));
         if !record.is_file() {
             if expected_name {
                 return Err(
@@ -57,7 +69,7 @@ pub(crate) fn find_mod(root: &Path, id: u64) -> Result<Option<PathBuf>> {
             continue;
         }
         if let Ok(record) = json(&record) {
-            if mod_matches(&record, id) {
+            if mod_matches(&record, id, provider) {
                 let path = entry.path().canonicalize().map_err(err)?;
                 if !path.starts_with(&root) {
                     return Err("Mod download folder is outside the selected root".into());
@@ -76,16 +88,21 @@ pub(crate) fn find_mod(root: &Path, id: u64) -> Result<Option<PathBuf>> {
 }
 
 pub(crate) fn mod_folder(root: &Path, info: &NexusLink, title: &str) -> Result<PathBuf> {
-    if let Some(path) = find_mod(root, info.mod_id)? {
+    if let Some(path) = find_mod_for(root, info.mod_id, &info.provider)? {
         return Ok(path);
     }
     fs::create_dir_all(root).map_err(err)?;
     let root = root.canonicalize().map_err(err)?;
-    let path = root.join(format!("{} [nexus-{}]", safe_name(title), info.mod_id));
+    let path = root.join(format!(
+        "{} [{}-{}]",
+        safe_name(title),
+        info.provider,
+        info.mod_id
+    ));
     // A pre-existing unrecognised folder belongs to the user; never take it over.
     fs::create_dir(&path)
         .map_err(|e| format!("Could not create mod folder {}: {e}", path.display()))?;
-    let record = serde_json::json!({"layout":1,"game":"inzoi","mod_id":info.mod_id,"name":title});
+    let record = serde_json::json!({"layout":1,"game":"inzoi","mod_id":info.mod_id,"name":title,"provider":info.provider});
     let result = fs::write(
         path.join(MOD_RECORD),
         serde_json::to_vec_pretty(&record).map_err(err)?,
@@ -115,7 +132,7 @@ pub(crate) fn file_folder(mod_folder: &Path, file_id: u64) -> Result<PathBuf> {
 }
 
 pub(crate) fn cached_file(root: &Path, info: &NexusLink) -> Result<Option<(PathBuf, u64)>> {
-    let Some(parent) = find_mod(root, info.mod_id)? else {
+    let Some(parent) = find_mod_for(root, info.mod_id, &info.provider)? else {
         return Ok(None);
     };
     let folder = parent.join("files").join(format!("file-{}", info.file_id));
@@ -141,7 +158,7 @@ pub(crate) fn download_root(folder: &Path, record: &serde_json::Value) -> Result
         return Err("Invalid saved mod folder layout".into());
     }
     let parent = files.parent().ok_or("Missing mod folder")?;
-    if !mod_matches(&json(&parent.join(MOD_RECORD))?, mod_id) {
+    if !mod_matches(&json(&parent.join(MOD_RECORD))?, mod_id, provider(record)) {
         return Err("Saved mod ID does not match this archive".into());
     }
     Ok(Some(
@@ -169,12 +186,13 @@ fn hash(path: &Path) -> Result<(u64, String)> {
 }
 
 pub(crate) fn cached(folder: &Path, info: &NexusLink) -> Result<Option<(PathBuf, u64)>> {
-    let marker = folder.join(FILE_RECORD);
+    let marker = folder.join(file_record(&info.provider));
     if !marker.exists() {
         return Ok(None);
     }
     let record = json(&marker)?;
-    if record["mod_id"].as_u64() != Some(info.mod_id)
+    if provider(&record) != info.provider
+        || record["mod_id"].as_u64() != Some(info.mod_id)
         || record["file_id"].as_u64() != Some(info.file_id)
     {
         return Err("Existing download metadata belongs to another mod or file".into());
@@ -258,7 +276,11 @@ impl PendingArchive {
         record["bytes"] = bytes.into();
         record["sha256"] = digest.into();
         record["layout"] = 2.into();
-        let marker = self.target.parent().unwrap().join(FILE_RECORD);
+        let marker = self
+            .target
+            .parent()
+            .unwrap()
+            .join(file_record(provider(&record)));
         let serialized = serde_json::to_vec_pretty(&record).map_err(err)?;
         let mut file = fs::OpenOptions::new()
             .write(true)
@@ -347,7 +369,7 @@ mod tests {
         fs::write(&archive, b"modified").unwrap(); // Same byte count must still be rejected.
         assert!(cached_file(&downloads, &info).is_err());
         assert_eq!(fs::read(&archive).unwrap(), b"modified");
-        let parent = find_mod(&downloads, 42).unwrap().unwrap();
+        let parent = find_mod_for(&downloads, 42, "nexus").unwrap().unwrap();
         fs::write(parent.join(MOD_RECORD), b"broken").unwrap();
         assert!(mod_folder(&downloads, &info, "Different title").is_err());
         assert_eq!(fs::read_dir(&downloads).unwrap().count(), 1);

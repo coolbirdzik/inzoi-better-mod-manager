@@ -1,17 +1,18 @@
 <script lang="ts">
  import {IconArrowUpRight,IconX} from '@tabler/icons-svelte';
  import {t} from './i18n.svelte';
- let {value=$bindable(''),disabled=false,onopen}:{value?:string;disabled?:boolean;onopen:()=>void}=$props();
+ let {provider='nexus',value=$bindable(''),disabled=false,saving=false,onopen,onchange}:{provider?:'nexus'|'curseforge';value?:string;disabled?:boolean;saving?:boolean;onopen:()=>void;onchange:(value:string)=>void}=$props();
+ const fieldId=$derived(`${provider}-api-key`);
 </script>
 
 <section class="nexus-api-key">
- <p id="nexus-api-key-guide">{t('nexusApiKeyGuide')}</p>
- <button class="wide" {disabled} onclick={onopen}>{t('getNexusApiKey')}<IconArrowUpRight size={15}/></button>
- <label for="nexus-api-key">{t('nexusApiKey')}</label>
-  <div class="key-input"><input id="nexus-api-key" type="password" bind:value autocomplete="off" spellcheck="false" placeholder={t('apiKeyPlaceholder')} aria-describedby="nexus-api-key-guide nexus-api-key-hint" {disabled}/>
-   {#if value}<button class="icon" {disabled} onclick={()=>value=''} aria-label={t('clearNexusApiKey')} title={t('clearNexusApiKey')}><IconX size={16}/></button>{/if}
+ <p id={`${fieldId}-guide`}>{t(provider==='curseforge'?'curseforgeApiKeyGuide':'nexusApiKeyGuide')}</p>
+ <button class="wide" {disabled} onclick={onopen}>{t(provider==='curseforge'?'getCurseforgeApiKey':'getNexusApiKey')}<IconArrowUpRight size={15}/></button>
+ <label for={fieldId}>{t(provider==='curseforge'?'curseforgeApiKey':'nexusApiKey')}</label>
+  <div class="key-input"><input id={fieldId} type="password" bind:value oninput={event=>onchange(event.currentTarget.value)} autocomplete="off" spellcheck="false" placeholder={t('apiKeyPlaceholder')} aria-describedby={`${fieldId}-guide ${fieldId}-hint`} {disabled}/>
+   {#if value}<button class="icon" {disabled} onclick={()=>{value='';onchange('')}} aria-label={t(provider==='curseforge'?'clearCurseforgeApiKey':'clearNexusApiKey')} title={t(provider==='curseforge'?'clearCurseforgeApiKey':'clearNexusApiKey')}><IconX size={16}/></button>{/if}
   </div>
- <p class="muted" id="nexus-api-key-hint">{t('apiKeyHint')}</p>
+ <p class="muted" id={`${fieldId}-hint`} role="status">{t(saving?'nexusKeySaving':provider==='curseforge'?'curseforgeApiKeyHint':'apiKeyHint')}</p>
 </section>
 
 <style>

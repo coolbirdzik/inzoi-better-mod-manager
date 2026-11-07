@@ -41,24 +41,25 @@ pub(crate) fn validate_sources(settings: &Settings) -> Result<()> {
     Ok(())
 }
 
-// Additional sources are a read-only catalogue. Only import/adopt can create
-// managed records or change mod files. Overlapping sources are de-duplicated.
+// Scanning is read-only. Explicit activation/removal registers the selected
+// source mod for management. Overlapping sources are de-duplicated.
 pub(crate) fn scan_sources(settings: &Settings) -> (Vec<Mod>, Vec<String>) {
     let mut mods = vec![];
     let mut warnings = vec![];
     let mut seen = HashSet::new();
     let game = Path::new(&settings.mods_dir).canonicalize().ok();
     let downloads = nexus::downloads_root(settings);
-    let roots = std::iter::once((Path::new(&settings.mods_dir), true))
+    let roots: Vec<_> = std::iter::once((Path::new(&settings.mods_dir), true))
         .chain(
             settings
                 .source_dirs
                 .iter()
                 .map(|source| (Path::new(&source.path), source.scan_subfolders)),
         )
-        .chain(downloads.exists().then_some((downloads.as_path(), true)));
-    for (root, recursive) in roots {
-        let (found, issues) = scan_with_options(root, recursive);
+        .chain(downloads.exists().then_some((downloads.as_path(), true)))
+        .collect();
+    for (root, recursive) in &roots {
+        let (found, issues) = scan_with_options(root, *recursive);
         warnings.extend(issues);
         for mut m in found {
             let path = Path::new(&m.path)
@@ -67,6 +68,19 @@ pub(crate) fn scan_sources(settings: &Settings) -> (Vec<Mod>, Vec<String>) {
             let key = dunce::simplified(&path).to_path_buf();
             if seen.insert(key) {
                 m.enabled &= game.as_ref().is_some_and(|game| path.starts_with(game));
+                mods.push(m);
+            }
+        }
+    }
+    for (root, recursive) in roots.into_iter().chain(std::iter::once((
+        Path::new(&settings.library_dir),
+        settings.scan_subfolders,
+    ))) {
+        for m in download_catalogue::scan(root, recursive) {
+            let path = Path::new(&m.path)
+                .canonicalize()
+                .unwrap_or_else(|_| PathBuf::from(&m.path));
+            if seen.insert(dunce::simplified(&path).to_path_buf()) {
                 mods.push(m);
             }
         }
@@ -92,6 +106,15 @@ pub(crate) fn catalogue(store: &Store) -> (Vec<Mod>, Vec<String>) {
         // Managed names/descriptions can be edited independently; refresh the
         // original metadata without overwriting those app-level edits.
         if let Ok(current) = read_mod(Path::new(&m.path), m.id.clone(), m.managed) {
+            if m.added_at == 0 {
+                m.added_at = current.added_at;
+            }
+            if m.thumbnail
+                .as_ref()
+                .is_none_or(|path| !Path::new(path).is_file())
+            {
+                m.thumbnail = current.thumbnail;
+            }
             m.metadata = current.metadata;
             if m.source.is_empty() {
                 m.source = current.source;
@@ -103,6 +126,20 @@ pub(crate) fn catalogue(store: &Store) -> (Vec<Mod>, Vec<String>) {
             mods.push(m);
         }
     }
+    // Imported projects already represent this archive in the library. Keep
+    // the standalone archive card only while it has no recognised mod folder.
+    let unpacked: Vec<_> = mods
+        .iter()
+        .filter(|m| !m.archive)
+        .map(|m| path_key(&m.path))
+        .collect();
+    mods.retain(|m| {
+        !m.archive
+            || !Path::new(&m.path).parent().is_some_and(|folder| {
+                let prefix = format!("{}/", path_key(&folder.to_string_lossy()));
+                unpacked.iter().any(|path| path.starts_with(&prefix))
+            })
+    });
     for m in &mut mods {
         m.tags = store
             .tags
@@ -113,7 +150,7 @@ pub(crate) fn catalogue(store: &Store) -> (Vec<Mod>, Vec<String>) {
     (mods, warnings)
 }
 
-fn set_mod_tags_core(id: String, tags: Vec<String>, state: &State) -> Result<()> {
+pub(crate) fn set_mod_tags_core(id: String, tags: Vec<String>, state: &State) -> Result<()> {
     let mut store = state.store.lock().map_err(err)?;
     let project = store
         .mods
@@ -173,6 +210,45 @@ pub(crate) fn set_mod_tags(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn added_dates_survive_reload_and_legacy_catalogues_use_folder_creation_time() {
+        let (root, state, source) = crate::lifecycle_tests::fixture();
+        let scanned = read_mod(&source, "source".into(), false).unwrap();
+        assert!(scanned.added_at > 0);
+        import_folder_core(source.to_string_lossy().into_owned(), &state).unwrap();
+        let mut saved: Store = serde_json::from_slice(&fs::read(&state.file).unwrap()).unwrap();
+        let original_date = saved.mods[0].added_at;
+        assert!(original_date > 0);
+        let id = saved.mods[0].id.clone();
+        let date = |store: &Store| {
+            catalogue(store)
+                .0
+                .into_iter()
+                .find(|m| m.id == id)
+                .unwrap()
+                .added_at
+        };
+        assert_eq!(date(&saved), original_date);
+        fs::write(
+            Path::new(&saved.mods[0].path).join("thumbnail.png"),
+            b"image",
+        )
+        .unwrap();
+        assert_eq!(date(&saved), original_date);
+        // Old saved stores did not have a date field; recover it without using
+        // the time of each scan, so restarting never makes old mods look new.
+        let mut legacy = serde_json::to_value(&saved).unwrap();
+        legacy["mods"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("added_at");
+        let legacy: Store = serde_json::from_value(legacy).unwrap();
+        assert_eq!(date(&legacy), original_date);
+        saved.mods[0].added_at = 1234;
+        assert_eq!(date(&saved), 1234);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn sources_preserve_files_deduplicate_overlaps_and_persist_tags_across_import() {
         let (root, state, _) = crate::lifecycle_tests::fixture();

@@ -18,15 +18,15 @@ async function desktop(page:Page){
    if(cmd==='update_portable')return false;
    if(cmd==='save_settings'){if(w.failSave)throw 'Cannot save settings';settings=args.settings;localStorage.setItem('navigation.settings',JSON.stringify(settings));}
    if(cmd==='plugin:dialog|open')return ['E:/MoreMods'];
-   if(cmd==='plugin:dialog|confirm')return true;
-   if(cmd==='toggle_mod'){const m=mods.find(m=>m.id===args.id)!;m.enabled=!m.enabled;}
+   if(cmd==='plugin:dialog|message')return args.buttons.OkCancelCustom[0];
+   if(cmd==='set_mod_enabled'){const m=mods.find(m=>m.id===args.id)!;m.enabled=args.enabled;return m.id;}
    if(cmd==='remove_mod'){const index=mods.findIndex(m=>m.id===args.id);mods.splice(index,1);}
    return null;
   }};
  });
  await page.goto('/');await expect(page.locator('.mod-row')).toHaveCount(4);
 }
-const managed=(page:Page)=>page.getByRole('button',{name:/^Managed mods \d+$/});
+const managed=(page:Page)=>page.getByRole('button',{name:/^All mods \d+$/});
 async function mouseButton(page:Page,button:3|4){
  await page.locator('main').dispatchEvent('mousedown',{button,bubbles:true,cancelable:true});
  await page.locator('main').dispatchEvent('mouseup',{button,bubbles:true,cancelable:true});
@@ -66,9 +66,9 @@ test('mouse back/forward restore folders and selection, while new navigation cle
  await page.getByRole('button',{name:'Back',exact:true}).click();await expect(page.getByRole('heading',{name:'Collection',exact:true})).toBeVisible();
  await page.locator('.folder-cards button').filter({hasText:'Hair'}).click();
  await expect(page.getByRole('button',{name:'Forward',exact:true})).toBeDisabled();
- await page.getByRole('button',{name:'Add source folders',exact:true}).click();
+ await page.getByRole('tab',{name:/^Source folders/}).click();await page.getByRole('button',{name:'Add source folders',exact:true}).click();
  await mouseButton(page,3);await expect(page.getByRole('dialog')).toBeVisible();
- await page.keyboard.press('Escape');await expect(page.getByRole('heading',{name:'Hair',exact:true})).toBeVisible();
+ await page.keyboard.press('Escape');await expect(page.getByRole('heading',{name:'Source folders',exact:true,level:1})).toBeVisible();
 });
 
 test('native browser history and real Chromium mouse side buttons each move only one step',async({page})=>{
@@ -93,7 +93,7 @@ test('right-click source menus change scan settings, open folders and detach wit
  await menu.getByRole('menuitemcheckbox',{name:'Scan subfolders'}).click();
  await expect(source.getByRole('checkbox',{name:'Scan subfolders'})).not.toBeChecked();
  await source.locator('.source-folder').click({button:'right'});await menu.getByRole('menuitem',{name:'Open folder',exact:true}).click();
- expect(await page.evaluate(()=>(window as any).calls.find((c:any)=>c.cmd==='plugin:opener|open_path').args.path)).toBe('D:/Collection');
+ expect(await page.evaluate(()=>(window as any).calls.find((c:any)=>c.cmd==='open_folder').args.path)).toBe('D:/Collection');
  await source.locator('.source-folder').focus();await page.keyboard.press('Shift+F10');await expect(menu).toBeVisible();
  await page.keyboard.press('ArrowDown');await expect(menu.getByRole('menuitem',{name:'Open folder',exact:true})).toBeFocused();
  await page.keyboard.press('Escape');await expect(source.locator('.source-folder')).toBeFocused();
@@ -106,12 +106,12 @@ test('right-click mod and folder menus match their targets and stay inside the w
  await page.setViewportSize({width:900,height:600});await desktop(page);
  const external=page.locator('.mod-row').filter({hasText:'Linen Dress'});
  await external.click({button:'right'});const menu=page.getByRole('menu',{name:'Context menu'});
- await expect(menu.getByRole('menuitem',{name:'Copy to library',exact:true})).toBeVisible();
- await expect(menu.getByRole('menuitem',{name:'Remove',exact:true})).toHaveCount(0);
+ await expect(menu.getByRole('menuitem',{name:'Enable in game',exact:true})).toBeVisible();
+ await expect(menu.getByRole('menuitem',{name:'Remove',exact:true})).toBeEnabled();
  await menu.getByRole('menuitem',{name:'Edit tags',exact:true}).click();await expect(page.getByRole('textbox',{name:'Add tag',exact:true})).toBeFocused();
  const nexus=page.locator('.mod-row').filter({hasText:'Nexus Outfit'});
  await nexus.click({button:'right'});await menu.getByRole('menuitem',{name:'Enable in game',exact:true}).click();
- await nexus.click({button:'right'});await expect(menu.getByRole('menuitem',{name:'Remove',exact:true})).toBeDisabled();
+ await nexus.click({button:'right'});await expect(menu.getByRole('menuitem',{name:'Remove',exact:true})).toBeEnabled();
  await menu.getByRole('menuitem',{name:'Disable mod',exact:true}).click();
  await managed(page).click();await page.getByRole('tab',{name:/^Source folders/}).click();await page.locator('.source-folder').filter({hasText:'Collection'}).click();
  const folder=page.locator('.folder-cards button').filter({hasText:'Clothing'});await folder.click({button:'right'});

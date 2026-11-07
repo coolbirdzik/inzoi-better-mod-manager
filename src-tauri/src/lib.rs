@@ -1,10 +1,16 @@
 mod portable;
 pub use portable::apply_from_cli;
+mod credentials;
+mod curseforge;
+mod download_catalogue;
 mod download_storage;
+mod folder_opener;
 mod library;
 mod metadata;
+mod mod_updates;
 mod nexus;
 mod thumbnails;
+mod update_check_log;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -57,6 +63,7 @@ impl<'de> Deserialize<'de> for SourceFolder {
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Settings {
+    #[serde(deserialize_with = "deserialize_folder_path")]
     mods_dir: String,
     library_dir: String,
     #[serde(default = "default_scan_subfolders")]
@@ -65,6 +72,16 @@ pub struct Settings {
     source_dirs: Vec<SourceFolder>,
     #[serde(default)]
     downloads_dir: String,
+}
+fn deserialize_folder_path<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<String, D::Error> {
+    let path = String::deserialize(deserializer)?;
+    Ok(if cfg!(windows) {
+        path.replace('/', "\\")
+    } else {
+        path
+    })
 }
 fn default_scan_subfolders() -> bool {
     true
@@ -90,6 +107,14 @@ pub struct Mod {
     metadata: std::collections::BTreeMap<String, serde_json::Value>,
     #[serde(default)]
     tags: Vec<String>,
+    #[serde(default)]
+    archive: bool,
+    #[serde(default)]
+    previous_version: Option<String>,
+    #[serde(default)]
+    superseded_by: Option<String>,
+    #[serde(default)]
+    added_at: u64,
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct Store {
@@ -105,6 +130,7 @@ struct State {
     store: Mutex<Store>,
     pending: Mutex<Vec<NexusLink>>,
     requests: Mutex<std::collections::HashMap<String, nexus::Request>>,
+    mod_updates: Mutex<std::collections::HashMap<String, mod_updates::Plan>>,
 }
 #[derive(Serialize)]
 struct Snapshot {
@@ -168,6 +194,17 @@ fn enable_manifest(folder: &Path) -> Result<()> {
     v[key] = serde_json::Value::Bool(true);
     fs::write(path, serde_json::to_vec_pretty(&v).map_err(err)?).map_err(err)
 }
+// Creation time is stable when activation or metadata edits touch the folder.
+// Platforms without birth times fall back to the existing modification time.
+fn path_added_at(path: &Path) -> u64 {
+    fs::metadata(path)
+        .and_then(|metadata| metadata.created().or_else(|_| metadata.modified()))
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 fn read_mod(folder: &Path, id: String, managed: bool) -> Result<Mod> {
     let manifest = folder.join("mod_manifest.json");
     let v: serde_json::Value = manifest_value(&fs::read(manifest).map_err(err)?)?;
@@ -186,7 +223,7 @@ fn read_mod(folder: &Path, id: String, managed: bool) -> Result<Mod> {
     .map(|n| folder.join(n))
     .find(|p| p.is_file())
     .map(|p| p.to_string_lossy().into_owned());
-    Ok(Mod {
+    let mut m = Mod {
         id,
         name: field(&v, "FriendlyName"),
         author: field(&v, "Author"),
@@ -205,7 +242,16 @@ fn read_mod(folder: &Path, id: String, managed: bool) -> Result<Mod> {
         library_root: None,
         metadata: metadata::read(folder, v),
         tags: vec![],
-    })
+        archive: false,
+        previous_version: None,
+        superseded_by: None,
+        added_at: path_added_at(folder),
+    };
+    if m.thumbnail.is_none() {
+        m.thumbnail = thumbnails::from_nexus(&m.metadata)
+            .or_else(|| thumbnails::from_curseforge(&m.metadata));
+    }
+    Ok(m)
 }
 #[cfg(test)]
 fn scan(root: &Path) -> (Vec<Mod>, Vec<String>) {
@@ -476,6 +522,7 @@ fn copy_tree(src: &Path, dest: &Path) -> Result<()> {
     }
     Ok(())
 }
+#[cfg(test)]
 fn import_folder_core(path: String, state: &State) -> Result<()> {
     import_folder_with_options(path, true, state)
 }
@@ -632,6 +679,87 @@ fn edit_mod(
     Ok(())
 }
 fn toggle_mod_core(id: String, state: &State) -> Result<()> {
+    let enabled = {
+        let s = state.store.lock().map_err(err)?;
+        s.mods
+            .iter()
+            .find(|m| m.id == id)
+            .ok_or("Mod no longer exists")?
+            .enabled
+    };
+    set_managed_enabled(id, !enabled, state)
+}
+
+// Resolve catalogue entries at the time of the action, never trust a UI path.
+// Game mods get a library backup first; attached source folders stay in place.
+fn manage_catalogue_mod(id: String, state: &State) -> Result<String> {
+    let mut s = state.store.lock().map_err(err)?;
+    if s.mods.iter().any(|m| m.id == id) {
+        return Ok(id);
+    }
+    let mut m = library::catalogue(&s)
+        .0
+        .into_iter()
+        .find(|m| m.id == id)
+        .ok_or("Mod no longer exists")?;
+    if m.archive {
+        return Err("Extract and import this archive before enabling it".into());
+    }
+    let source = Path::new(&m.path).canonicalize().map_err(err)?;
+    if Path::new(&s.settings.mods_dir)
+        .canonicalize()
+        .is_ok_and(|game| source.starts_with(game))
+    {
+        drop(s);
+        adopt_mod_core(m.path.clone(), state)?;
+        let s = state.store.lock().map_err(err)?;
+        return s
+            .mods
+            .iter()
+            .find(|known| {
+                known
+                    .deployed_path
+                    .as_ref()
+                    .is_some_and(|path| library::same_path(path, &m.path))
+            })
+            .map(|known| known.id.clone())
+            .ok_or("Could not register game mod".into());
+    }
+    let root = s
+        .settings
+        .source_dirs
+        .iter()
+        .map(|source| PathBuf::from(&source.path))
+        .chain(std::iter::once(nexus::downloads_root(&s.settings)))
+        .filter_map(|root| root.canonicalize().ok())
+        .filter(|root| source.starts_with(root))
+        .max_by_key(|root| root.components().count())
+        .ok_or("Mod is outside library sources")?;
+    let root = if root == source {
+        root.parent().ok_or("Missing source parent")?.to_path_buf()
+    } else {
+        root
+    };
+    m.managed = true;
+    m.id = uuid::Uuid::new_v4().to_string();
+    let managed_id = m.id.clone();
+    m.enabled = false;
+    m.library_root = Some(root.to_string_lossy().into_owned());
+    s.mods.push(m);
+    if let Err(error) = write_store(state, &s) {
+        s.mods.pop();
+        return Err(error);
+    }
+    Ok(managed_id)
+}
+
+fn set_mod_enabled_core(id: String, enabled: bool, state: &State) -> Result<String> {
+    let id = manage_catalogue_mod(id, state)?;
+    set_managed_enabled(id.clone(), enabled, state)?;
+    Ok(id)
+}
+
+fn set_managed_enabled(id: String, enabled: bool, state: &State) -> Result<()> {
     let mut s = state.store.lock().map_err(err)?;
     let pos = s
         .mods
@@ -639,9 +767,30 @@ fn toggle_mod_core(id: String, state: &State) -> Result<()> {
         .position(|m| m.id == id)
         .ok_or("Import this external mod before managing it")?;
     let m = s.mods[pos].clone();
+    if enabled
+        && library::catalogue(&s).0.iter().any(|other| {
+            other.id != m.id && other.enabled && other.project.eq_ignore_ascii_case(&m.project)
+        })
+    {
+        return Err(
+            "Another version of this project is enabled. Disable it before enabling this one."
+                .into(),
+        );
+    }
     let target = deployment_target(&s.settings, &m)?;
     let marker = target.join(".inzoimm-owner");
-    if m.enabled {
+    if !enabled {
+        if !target.exists() {
+            if !m.enabled {
+                return Ok(());
+            }
+            s.mods[pos].enabled = false;
+            if let Err(error) = write_store(state, &s) {
+                s.mods[pos].enabled = m.enabled;
+                return Err(error);
+            }
+            return Ok(());
+        }
         if fs::read_to_string(&marker).map_err(err)? != m.id {
             return Err("Ownership marker mismatch; refusing to touch game files".into());
         }
@@ -658,7 +807,7 @@ fn toggle_mod_core(id: String, state: &State) -> Result<()> {
         s.mods[pos].enabled = false;
         if let Err(e) = write_store(&state, &s) {
             let _ = fs::rename(backup, target);
-            s.mods[pos].enabled = true;
+            s.mods[pos].enabled = m.enabled;
             return Err(e);
         }
     } else {
@@ -673,7 +822,7 @@ fn toggle_mod_core(id: String, state: &State) -> Result<()> {
             enable_manifest(&target)?;
             s.mods[pos].enabled = true;
             if let Err(e) = write_store(state, &s) {
-                s.mods[pos].enabled = false;
+                s.mods[pos].enabled = m.enabled;
                 let _ = fs::write(file, old);
                 return Err(e);
             }
@@ -707,7 +856,7 @@ fn toggle_mod_core(id: String, state: &State) -> Result<()> {
         }
         s.mods[pos].enabled = true;
         if let Err(e) = write_store(&state, &s) {
-            s.mods[pos].enabled = false;
+            s.mods[pos].enabled = m.enabled;
             let _ = fs::rename(&target, &temp);
             return Err(e);
         }
@@ -715,6 +864,41 @@ fn toggle_mod_core(id: String, state: &State) -> Result<()> {
     Ok(())
 }
 fn remove_mod_core(id: String, state: &State) -> Result<()> {
+    {
+        let s = state.store.lock().map_err(err)?;
+        if let Some(m) = library::catalogue(&s)
+            .0
+            .into_iter()
+            .find(|m| m.id == id && m.archive)
+        {
+            let source = Path::new(&m.path).canonicalize().map_err(err)?;
+            let root = Path::new(
+                m.library_root
+                    .as_ref()
+                    .ok_or("Missing archive library root")?,
+            )
+            .canonicalize()
+            .map_err(err)?;
+            if !source.starts_with(&root) || source == root || !source.is_file() {
+                return Err("Archive containment check failed".into());
+            }
+            let sidecar =
+                metadata::download_sidecar(source.parent().ok_or("Missing archive parent")?);
+            let trash = root.join(".trash").join(uuid::Uuid::new_v4().to_string());
+            fs::create_dir_all(&trash).map_err(err)?;
+            let dest = trash.join(source.file_name().ok_or("Missing archive filename")?);
+            fs::rename(&source, &dest).map_err(err)?;
+            if let Err(error) = fs::rename(
+                &sidecar,
+                trash.join(sidecar.file_name().ok_or("Missing download record name")?),
+            ) {
+                let _ = fs::rename(&dest, &source);
+                return Err(err(error));
+            }
+            return Ok(());
+        }
+    }
+    let id = manage_catalogue_mod(id, state)?;
     let mut s = state.store.lock().map_err(err)?;
     let pos = s
         .mods
@@ -722,9 +906,6 @@ fn remove_mod_core(id: String, state: &State) -> Result<()> {
         .position(|m| m.id == id)
         .ok_or("External mods are not removed by this command")?;
     let m = s.mods[pos].clone();
-    if m.enabled {
-        return Err("Disable this mod before removing it".into());
-    }
     let source = PathBuf::from(&m.path).canonicalize().map_err(err)?;
     let root = PathBuf::from(m.library_root.as_ref().unwrap_or(&s.settings.library_dir))
         .canonicalize()
@@ -751,7 +932,8 @@ fn remove_mod_core(id: String, state: &State) -> Result<()> {
     let deployed = deployment_target(&s.settings, &m)?;
     let mut deployed_backup = None;
     if deployed.exists()
-        && (m.deployed_path.is_some()
+        && (m.enabled
+            || m.deployed_path.is_some()
             || fs::read_to_string(deployed.join(".inzoimm-owner"))
                 .ok()
                 .as_deref()
@@ -778,7 +960,7 @@ fn remove_mod_core(id: String, state: &State) -> Result<()> {
         fs::rename(&deployed, &backup).map_err(err)?;
         deployed_backup = Some((deployed, backup));
     }
-    let dest = trash.join(format!("{}-{}", m.id, uuid::Uuid::new_v4()));
+    let dest = trash.join(uuid::Uuid::new_v4().to_string());
     if let Err(e) = fs::rename(&source, &dest) {
         if let Some((original, backup)) = &deployed_backup {
             let _ = fs::rename(backup, original);
@@ -832,6 +1014,10 @@ fn toggle_mod(id: String, state: tauri::State<State>) -> Result<()> {
     toggle_mod_core(id, &state)
 }
 #[tauri::command(async)]
+fn set_mod_enabled(id: String, enabled: bool, state: tauri::State<State>) -> Result<String> {
+    set_mod_enabled_core(id, enabled, &state)
+}
+#[tauri::command(async)]
 fn remove_mod(id: String, state: tauri::State<State>) -> Result<()> {
     remove_mod_core(id, &state)
 }
@@ -850,12 +1036,6 @@ fn adopt_mod_core(path: String, state: &State) -> Result<()> {
     let id = uuid::Uuid::new_v4().to_string();
     let mut m = read_mod(&source, id.clone(), false)?;
     m.managed = true;
-    if s.mods
-        .iter()
-        .any(|x| x.project.eq_ignore_ascii_case(&m.project))
-    {
-        return Err("This project is already in your library".into());
-    }
     let library = PathBuf::from(&s.settings.library_dir);
     fs::create_dir_all(&library).map_err(err)?;
     let library = library.canonicalize().map_err(err)?;
@@ -987,11 +1167,18 @@ fn import_archive(
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct NexusLink {
+    #[serde(default = "nexus_provider")]
+    provider: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    slug: Option<String>,
     request_id: String,
     game: String,
     mod_id: u64,
     file_id: u64,
     url: String,
+}
+fn nexus_provider() -> String {
+    "nexus".into()
 }
 fn parse_link(raw: &str) -> Result<NexusLink> {
     let u = url::Url::parse(raw).map_err(err)?;
@@ -1003,6 +1190,8 @@ fn parse_link(raw: &str) -> Result<NexusLink> {
         return Err("Invalid Nexus mod link".into());
     }
     Ok(NexusLink {
+        provider: "nexus".into(),
+        slug: None,
         request_id: uuid::Uuid::new_v4().to_string(),
         game: "inzoi".into(),
         mod_id: parts[1].parse().map_err(err)?,
@@ -1085,7 +1274,7 @@ pub fn run() {
                 let docs = app.path().document_dir()?;
                 Store {
                     settings: Settings {
-                        mods_dir: docs.join("inZOI/Mods").to_string_lossy().into_owned(),
+                        mods_dir: docs.join("inZOI").join("Mods").to_string_lossy().into_owned(),
                         library_dir: dir.join("library").to_string_lossy().into_owned(),
                         scan_subfolders: true,
                         source_dirs: vec![],
@@ -1121,6 +1310,7 @@ pub fn run() {
                 store: Mutex::new(store),
                 pending: Mutex::new(pending),
                 requests: Mutex::new(requests),
+                mod_updates: Mutex::new(Default::default()),
             });
             let handle = app.handle().clone();
             app.deep_link().on_open_url(move |event| {
@@ -1132,8 +1322,14 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             snapshot,
+            folder_opener::open_folder,
             set_mod_thumbnail,
             library::set_mod_tags,
+            mod_updates::check_mod_update,
+            update_check_log::read_mod_check_log,
+            mod_updates::prepare_mod_update,
+            mod_updates::install_mod_update,
+            mod_updates::restore_previous_mod,
             save_settings,
             import_folder,
             import_zip,
@@ -1141,12 +1337,17 @@ pub fn run() {
             adopt_mod,
             edit_mod,
             toggle_mod,
+            set_mod_enabled,
             remove_mod,
             parse_nxm,
             pending_links,
             register_nxm,
             nexus::download_nxm,
             nexus::cancel_nxm,
+            credentials::load_nexus_api_key,
+            credentials::save_nexus_api_key,
+            credentials::load_curseforge_api_key,
+            credentials::save_curseforge_api_key,
             portable::is_portable,
             portable::update_portable
         ])
@@ -1466,6 +1667,7 @@ mod lifecycle_tests {
             file: root.join("store.json"),
             pending: Mutex::new(vec![]),
             requests: Mutex::new(std::collections::HashMap::new()),
+            mod_updates: Mutex::new(Default::default()),
             store: Mutex::new(Store {
                 settings: Settings {
                     mods_dir: game.to_string_lossy().into_owned(),
@@ -1492,9 +1694,8 @@ mod lifecycle_tests {
         assert!(!source.exists());
         toggle_mod_core(m.id.clone(), &state).unwrap();
         assert_eq!(fs::read(source.join("payload.pak")).unwrap(), [1, 2, 3, 4]);
-        assert!(remove_mod_core(m.id.clone(), &state).is_err());
-        toggle_mod_core(m.id.clone(), &state).unwrap();
         remove_mod_core(m.id, &state).unwrap();
+        assert!(!source.exists());
         assert!(state.store.lock().unwrap().mods.is_empty());
         assert_eq!(
             fs::read_dir(root.join("library/.trash")).unwrap().count(),
@@ -1708,6 +1909,7 @@ mod failure_rollback_tests {
     fn deployment_is_published_only_when_complete() {
         let (root, state, source) = super::lifecycle_tests::fixture();
         import_folder_core(source.to_string_lossy().into_owned(), &state).unwrap();
+        fs::remove_dir_all(&source).unwrap(); // The original is no longer installed.
         let id = state.store.lock().unwrap().mods[0].id.clone();
         toggle_mod_core(id, &state).unwrap();
         let target = root.join("game/Mods/Hair_ABC");
@@ -1723,6 +1925,164 @@ mod failure_rollback_tests {
             .file_name()
             .to_string_lossy()
             .starts_with(".inzoimm-")));
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod unified_library_tests {
+    use super::*;
+
+    #[test]
+    fn installed_mod_can_be_removed_without_a_separate_adoption_step() {
+        let (root, state, source) = super::lifecycle_tests::fixture();
+        let external = library::catalogue(&state.store.lock().unwrap()).0.remove(0);
+        remove_mod_core(external.id, &state).unwrap();
+        assert!(!source.exists());
+        assert!(library::catalogue(&state.store.lock().unwrap())
+            .0
+            .is_empty());
+        let recovered = fs::read_dir(root.join("library/.trash"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        assert_eq!(
+            fs::read(recovered.join("payload.pak")).unwrap(),
+            [1, 2, 3, 4]
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn single_mod_source_folder_supports_activation_and_recoverable_removal() {
+        let (root, state, source) = super::lifecycle_tests::fixture();
+        let local = root.join("local-mod");
+        fs::rename(source, &local).unwrap();
+        state
+            .store
+            .lock()
+            .unwrap()
+            .settings
+            .source_dirs
+            .push(local.to_string_lossy().into_owned().into());
+        let external = library::catalogue(&state.store.lock().unwrap()).0.remove(0);
+        let id = set_mod_enabled_core(external.id, true, &state).unwrap();
+        assert!(root.join("game/Mods/Hair_ABC").exists());
+        remove_mod_core(id, &state).unwrap();
+        assert!(!local.exists());
+        assert!(!root.join("game/Mods/Hair_ABC").exists());
+        assert!(library::catalogue(&state.store.lock().unwrap())
+            .0
+            .is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn copied_version_cannot_enable_while_the_original_is_installed() {
+        let (root, state, source) = super::lifecycle_tests::fixture();
+        import_folder_core(source.to_string_lossy().into_owned(), &state).unwrap();
+        let id = state.store.lock().unwrap().mods[0].id.clone();
+        assert!(set_mod_enabled_core(id, true, &state).is_err());
+        assert!(!root.join("game/Mods/Hair_ABC").exists());
+        assert!(source.join("payload.pak").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn installed_mod_disables_directly_survives_reload_and_removes_while_enabled() {
+        let (root, state, source) = super::lifecycle_tests::fixture();
+        let external = library::catalogue(&state.store.lock().unwrap()).0.remove(0);
+        let id = set_mod_enabled_core(external.id, false, &state).unwrap();
+        assert!(!source.exists());
+        let saved: Store = serde_json::from_slice(&fs::read(&state.file).unwrap()).unwrap();
+        let (mods, _) = library::catalogue(&saved);
+        assert_eq!(mods.len(), 1);
+        assert!(mods[0].managed && !mods[0].enabled);
+        let library_path = PathBuf::from(&mods[0].path);
+        assert!(library_path.starts_with(root.join("library").canonicalize().unwrap()));
+        assert_eq!(
+            fs::read(library_path.join("payload.pak")).unwrap(),
+            [1, 2, 3, 4]
+        );
+        set_mod_enabled_core(id.clone(), true, &state).unwrap();
+        set_mod_enabled_core(id.clone(), true, &state).unwrap();
+        assert!(source.exists());
+        assert_eq!(library::catalogue(&state.store.lock().unwrap()).0.len(), 1);
+        remove_mod_core(id, &state).unwrap();
+        assert!(!source.exists() && !library_path.exists());
+        assert!(library::catalogue(&state.store.lock().unwrap())
+            .0
+            .is_empty());
+        assert_eq!(
+            fs::read_dir(root.join("library/.trash")).unwrap().count(),
+            1
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn disabling_an_already_disabled_game_manifest_still_keeps_it_only_in_library() {
+        let (root, state, source) = super::lifecycle_tests::fixture();
+        fs::write(
+            source.join("mod_manifest.json"),
+            br#"{"ProjectName":"Hair_ABC","bEnable":false}"#,
+        )
+        .unwrap();
+        let external = library::catalogue(&state.store.lock().unwrap()).0.remove(0);
+        assert!(!external.enabled);
+        set_mod_enabled_core(external.id, false, &state).unwrap();
+        assert!(!source.exists());
+        assert!(Path::new(&state.store.lock().unwrap().mods[0].path)
+            .join("payload.pak")
+            .exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn source_mod_has_direct_controls_without_copying_or_duplicate_rows() {
+        let (root, state, source) = super::lifecycle_tests::fixture();
+        let sources = root.join("sources");
+        fs::create_dir_all(&sources).unwrap();
+        let local = sources.join("Hair");
+        fs::rename(source, &local).unwrap();
+        state
+            .store
+            .lock()
+            .unwrap()
+            .settings
+            .source_dirs
+            .push(sources.to_string_lossy().into_owned().into());
+        let external = library::catalogue(&state.store.lock().unwrap()).0.remove(0);
+        let id = set_mod_enabled_core(external.id, true, &state).unwrap();
+        assert!(root.join("game/Mods/Hair_ABC/payload.pak").exists());
+        assert_eq!(library::catalogue(&state.store.lock().unwrap()).0.len(), 1);
+        set_mod_enabled_core(id.clone(), false, &state).unwrap();
+        assert!(!root.join("game/Mods/Hair_ABC").exists());
+        assert_eq!(fs::read(local.join("payload.pak")).unwrap(), [1, 2, 3, 4]);
+        remove_mod_core(id, &state).unwrap();
+        assert!(!local.exists());
+        let remaining = library::catalogue(&state.store.lock().unwrap()).0;
+        assert!(
+            remaining.is_empty(),
+            "Unexpected mods: {:?}",
+            remaining.iter().map(|m| &m.path).collect::<Vec<_>>()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_active_removal_restores_library_game_and_enabled_state() {
+        let (root, state, source) = super::lifecycle_tests::fixture();
+        adopt_mod_core(source.to_string_lossy().into_owned(), &state).unwrap();
+        let m = state.store.lock().unwrap().mods[0].clone();
+        fs::remove_file(&state.file).unwrap();
+        fs::create_dir(&state.file).unwrap();
+        assert!(remove_mod_core(m.id, &state).is_err());
+        assert!(state.store.lock().unwrap().mods[0].enabled);
+        assert_eq!(fs::read(source.join("payload.pak")).unwrap(), [1, 2, 3, 4]);
+        assert!(Path::new(&m.path).join("payload.pak").exists());
         fs::remove_dir_all(root).unwrap();
     }
 }

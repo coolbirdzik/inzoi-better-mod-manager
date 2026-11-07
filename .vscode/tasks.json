@@ -1,0 +1,74 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Release: dry run",
+      "detail": "Preview the next version and changed files. Does not change files or contact the remote.",
+      "type": "process",
+      "command": "node",
+      "args": ["scripts/release.mjs", "${input:releaseVersion}", "--dry-run"],
+      "options": {"cwd": "${workspaceFolder}"},
+      "problemMatcher": [],
+      "presentation": {"reveal": "always", "panel": "dedicated", "clear": true}
+    },
+    {
+      "label": "Release: bump, tag (no push)",
+      "detail": "Run pnpm checks, sync package/Tauri/Cargo versions, commit and create a local release tag.",
+      "type": "process",
+      "command": "node",
+      "args": ["scripts/release.mjs", "${input:releaseVersion}", "--no-push"],
+      "options": {"cwd": "${workspaceFolder}"},
+      "problemMatcher": [],
+      "presentation": {"reveal": "always", "panel": "dedicated", "clear": true, "focus": true}
+    },
+    {
+      "label": "Release: bump, tag and push (build release)",
+      "detail": "Run checks, bump, commit and atomically push main + tag. GitHub Actions builds and verifies the release before publishing.",
+      "type": "process",
+      "command": "node",
+      "args": ["scripts/release.mjs", "${input:releaseVersion}"],
+      "options": {"cwd": "${workspaceFolder}"},
+      "problemMatcher": [],
+      "presentation": {"reveal": "always", "panel": "dedicated", "clear": true, "focus": true}
+    },
+    {
+      "label": "Build: local release",
+      "detail": "Build the current version locally: Windows NSIS installer + portable ZIP, or macOS app + DMG. No bump, tag or push.",
+      "type": "process",
+      "command": "node",
+      "args": ["scripts/release.mjs", "--build"],
+      "options": {"cwd": "${workspaceFolder}"},
+      "group": "build",
+      "problemMatcher": [],
+      "presentation": {"reveal": "always", "panel": "dedicated", "clear": true}
+    },
+    {
+      "label": "Check: release checks",
+      "detail": "Test release tooling, translations, Rust, frontend build and desktop UI.",
+      "type": "process",
+      "command": "node",
+      "args": ["scripts/release.mjs", "--check"],
+      "options": {"cwd": "${workspaceFolder}"},
+      "problemMatcher": [],
+      "presentation": {"reveal": "always", "panel": "dedicated", "clear": true}
+    },
+    {
+      "label": "Dev: run the app",
+      "type": "shell",
+      "command": "pnpm",
+      "args": ["run", "desktop"],
+      "options": {"cwd": "${workspaceFolder}"},
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": {"reveal": "always", "panel": "dedicated"}
+    }
+  ],
+  "inputs": [
+    {
+      "id": "releaseVersion",
+      "type": "promptString",
+      "description": "New version: patch, minor, major, or exact stable X.Y.Z (for example 0.1.4)",
+      "default": "patch"
+    }
+  ]
+}

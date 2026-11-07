@@ -15,7 +15,16 @@ pub(crate) fn read_limited(path: &Path, limit: u64) -> Result<Vec<u8>> {
 pub(crate) fn download_record(info: &NexusLink, file: &serde_json::Value) -> serde_json::Value {
     // Persist the public page and file metadata, never the signed NXM request,
     // API key or download mirror URL.
-    serde_json::json!({"url": info.url, "mod_id": info.mod_id, "file_id": info.file_id, "file": file})
+    serde_json::json!({"provider":info.provider,"url": info.url, "mod_id": info.mod_id, "file_id": info.file_id, "file": file})
+}
+
+pub(crate) fn download_sidecar(folder: &Path) -> PathBuf {
+    let curseforge = folder.join(".inzoimm-curseforge.json");
+    if curseforge.is_file() {
+        curseforge
+    } else {
+        folder.join(".inzoimm-nexus.json")
+    }
 }
 
 // The download's own directory holds both the archive and its unpacked mods.
@@ -23,10 +32,7 @@ pub(crate) fn download_record(info: &NexusLink, file: &serde_json::Value) -> ser
 // the user selects a new default while this download is running.
 pub(crate) fn download_destination(archive: &Path) -> Result<(PathBuf, PathBuf)> {
     let folder = archive.parent().ok_or("Missing download folder")?;
-    let record = manifest_value(&read_limited(
-        &folder.join(".inzoimm-nexus.json"),
-        2 * 1024 * 1024,
-    )?)?;
+    let record = manifest_value(&read_limited(&download_sidecar(folder), 2 * 1024 * 1024)?)?;
     if let Some(root) = download_storage::download_root(folder, &record)? {
         return Ok((folder.to_path_buf(), root));
     }
@@ -51,13 +57,17 @@ pub(crate) fn attach_download(archive: &Path, extracted: &Path) -> Result<()> {
     let Some(parent) = archive.parent() else {
         return Ok(());
     };
-    let record = parent.join(".inzoimm-nexus.json");
+    let record = download_sidecar(parent);
     if !record.is_file() {
         return Ok(());
     }
     let download = manifest_value(&read_limited(&record, 2 * 1024 * 1024)?)?;
     for m in scan_with_options(extracted, true).0 {
-        let path = Path::new(&m.path).join("nexus.json");
+        let path = Path::new(&m.path).join(if download["provider"] == "curseforge" {
+            "curseforge.json"
+        } else {
+            "nexus.json"
+        });
         let mut metadata = if path.is_file() {
             manifest_value(&read_limited(&path, 2 * 1024 * 1024)?)?
         } else {
@@ -77,7 +87,7 @@ pub(crate) fn read(
     manifest: serde_json::Value,
 ) -> BTreeMap<String, serde_json::Value> {
     let mut result = BTreeMap::from([("mod_manifest.json".into(), manifest)]);
-    for name in ["metadata.json", "nexus.json", "meta.ini"] {
+    for name in ["metadata.json", "nexus.json", "curseforge.json", "meta.ini"] {
         let path = folder.join(name);
         if !path.is_file() {
             continue;
@@ -129,12 +139,18 @@ pub(crate) fn from_game_library(path: &Path) -> Result<BTreeMap<String, serde_js
         if value(details, "gameId").and_then(|v| v.as_u64()) != Some(88849) {
             continue;
         }
-        for file in details
-            .get("latestFiles")
-            .and_then(|v| v.as_array())
-            .into_iter()
-            .flatten()
-        {
+        let installed_file = value(installed, "installedFile");
+        let mut saved_details = details.clone();
+        if let Some(file) = installed_file {
+            saved_details["Installed file"] = crate::curseforge::public_metadata(file.clone());
+        }
+        for file in installed_file.into_iter().chain(
+            details
+                .get("latestFiles")
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten(),
+        ) {
             for module in file
                 .get("modules")
                 .and_then(|v| v.as_array())
@@ -146,7 +162,9 @@ pub(crate) fn from_game_library(path: &Path) -> Result<BTreeMap<String, serde_js
                     .and_then(|v| v.as_str())
                     .filter(|name| safe_project(name))
                 {
-                    result.insert(project.to_lowercase(), details.clone());
+                    result
+                        .entry(project.to_lowercase())
+                        .or_insert_with(|| saved_details.clone());
                 }
             }
         }

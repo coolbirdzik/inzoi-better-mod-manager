@@ -55,7 +55,7 @@ test('settings preserve scan choice after folder selection and reload, and defau
 });
 
 test('add source in Managed mods offers scan choice and leaves game and download folders alone',async({page})=>{
- await desktop(page);await page.getByRole('button',{name:/^Managed mods \d+$/}).click();
+ await desktop(page);await page.getByRole('tab',{name:/^Source folders/}).click();
  await page.getByRole('button',{name:'Add source folders',exact:true}).click();
  const dialog=page.getByRole('dialog',{name:'Add source folders',exact:true});
  await expect(dialog.getByRole('checkbox',{name:'Scan subfolders'})).toBeVisible();

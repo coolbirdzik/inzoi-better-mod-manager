@@ -12,6 +12,47 @@ fn trusted_image(raw: &str) -> Option<String> {
     .then(|| url.to_string())
 }
 
+fn nexus_image(raw: &str) -> Option<String> {
+    let url = url::Url::parse(raw).ok()?;
+    (url.scheme() == "https"
+        && matches!(
+            url.host_str(),
+            Some("staticdelivery.nexusmods.com" | "images.nexusmods.com")
+        )
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.port().is_none())
+    .then(|| url.to_string())
+}
+
+pub(crate) fn from_nexus(metadata: &BTreeMap<String, serde_json::Value>) -> Option<String> {
+    let record = metadata.get("nexus.json")?;
+    [
+        "/Download/mod/picture_url",
+        "/mod/picture_url",
+        "/picture_url",
+    ]
+    .into_iter()
+    .filter_map(|key| record.pointer(key).and_then(|value| value.as_str()))
+    .find_map(nexus_image)
+}
+
+pub(crate) fn from_curseforge(metadata: &BTreeMap<String, serde_json::Value>) -> Option<String> {
+    let record = metadata
+        .get("curseforge.json")
+        .or_else(|| metadata.get("Game library"))?;
+    [
+        "/Download/mod/logo/thumbnailUrl",
+        "/Download/mod/logo/url",
+        "/mod/logo/thumbnailUrl",
+        "/logo/thumbnailUrl",
+        "/logo/url",
+    ]
+    .into_iter()
+    .filter_map(|key| record.pointer(key).and_then(|v| v.as_str()))
+    .find_map(trusted_image)
+}
+
 // inZOI keeps CurseForge logos outside the installed mod folders. Match the
 // package's exact project name, never the mod's human-readable display name.
 pub(crate) fn from_game_library(path: &Path) -> Result<BTreeMap<String, String>> {
@@ -74,10 +115,11 @@ pub(crate) fn from_game_library(path: &Path) -> Result<BTreeMap<String, String>>
 
 pub(crate) fn apply(mods: &mut [Mod], images: &BTreeMap<String, String>) {
     for m in mods {
-        if m.thumbnail
-            .as_ref()
-            .is_none_or(|path| !Path::new(path).is_file())
-        {
+        if m.thumbnail.as_ref().is_none_or(|path| {
+            !Path::new(path).is_file()
+                && nexus_image(path).is_none()
+                && trusted_image(path).is_none()
+        }) {
             if let Some(url) = images.get(&m.project.to_lowercase()) {
                 m.thumbnail = Some(url.clone());
             }
@@ -88,6 +130,78 @@ pub(crate) fn apply(mods: &mut [Mod], images: &BTreeMap<String, String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_nexus_image_appears_for_existing_managed_mods_without_overwriting_local_images() {
+        let (root, state, source) = crate::lifecycle_tests::fixture();
+        let image = "https://staticdelivery.nexusmods.com/mods/6919/images/476/preview.jpg";
+        fs::write(source.join("nexus.json"), serde_json::json!({"Download":{"mod_id":476,"mod":{"picture_url":image,"uploaded_users_profile_url":"https://images.nexusmods.com/avatars/author.jpg"}}}).to_string()).unwrap();
+        import_folder_core(source.to_string_lossy().into_owned(), &state).unwrap();
+        let mut saved = state.store.lock().unwrap().clone();
+        let managed = PathBuf::from(&saved.mods[0].path);
+        // Older library records did not persist a thumbnail even though their
+        // local nexus.json already contained the primary image.
+        saved.mods[0].thumbnail = None;
+        let mut mods = library::catalogue(&saved).0;
+        let m = mods.iter().find(|m| m.managed).unwrap();
+        assert_eq!(m.thumbnail.as_deref(), Some(image));
+        apply(
+            &mut mods,
+            &BTreeMap::from([(
+                "hair_abc".into(),
+                "https://media.forgecdn.net/avatars/other.jpg".into(),
+            )]),
+        );
+        assert_eq!(
+            mods.iter()
+                .find(|m| m.managed)
+                .unwrap()
+                .thumbnail
+                .as_deref(),
+            Some(image)
+        );
+        let local = managed.join("thumbnail.png");
+        fs::write(&local, b"local image").unwrap();
+        assert_eq!(
+            read_mod(&managed, "test".into(), true)
+                .unwrap()
+                .thumbnail
+                .as_deref(),
+            local.to_str()
+        );
+        assert_eq!(
+            library::catalogue(&saved)
+                .0
+                .iter()
+                .find(|m| m.managed)
+                .unwrap()
+                .thumbnail
+                .as_deref(),
+            local.to_str()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn nexus_image_sources_are_restricted_to_public_nexus_cdn_urls() {
+        for raw in [
+            "http://staticdelivery.nexusmods.com/image.jpg",
+            "https://staticdelivery.nexusmods.com.attacker.test/image.jpg",
+            "https://user:secret@staticdelivery.nexusmods.com/image.jpg",
+            "https://staticdelivery.nexusmods.com:8443/image.jpg",
+            "https://localhost/image.jpg",
+            "file:///private/image.jpg",
+        ] {
+            assert!(nexus_image(raw).is_none(), "{raw}");
+        }
+        assert!(nexus_image("https://staticdelivery.nexusmods.com/mods/6919/image.jpg").is_some());
+        assert!(nexus_image("https://images.nexusmods.com/image.jpg").is_some());
+        let metadata = BTreeMap::from([(
+            "nexus.json".into(),
+            serde_json::json!({"Download":{"mod":{"picture_url":null}}}),
+        )]);
+        assert!(from_nexus(&metadata).is_none());
+    }
 
     #[test]
     fn game_metadata_maps_logos_by_exact_project_and_keeps_local_images() {

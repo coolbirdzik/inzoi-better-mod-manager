@@ -21,6 +21,15 @@ pub(crate) struct Request {
     cancel: tokio::sync::watch::Sender<bool>,
 }
 pub(crate) fn parse_request(raw: &str) -> Result<Request> {
+    if !raw.starts_with("nxm:") {
+        return Ok(Request {
+            info: curseforge::parse_link(raw)?,
+            key: None,
+            expires: None,
+            active: Arc::new(AtomicBool::new(false)),
+            cancel: tokio::sync::watch::channel(false).0,
+        });
+    }
     let info = parse_link(raw)?;
     let u = url::Url::parse(raw).map_err(|_| "Invalid NXM URL")?;
     let query: HashMap<_, _> = u
@@ -83,10 +92,29 @@ fn trusted_mirror(u: &url::Url) -> bool {
             })
             .unwrap_or(false)
 }
-async fn api_json(client: &reqwest::Client, url: url::Url, key: &str) -> Result<serde_json::Value> {
+pub(crate) fn api_client() -> Result<reqwest::Client> {
+    configure_tls();
+    reqwest::Client::builder()
+        .https_only(true)
+        .connect_timeout(Duration::from_secs(20))
+        .timeout(Duration::from_secs(60))
+        .redirect(reqwest::redirect::Policy::none())
+        .user_agent(concat!(
+            "inZOI-Better-Mod-Manager/",
+            env!("CARGO_PKG_VERSION")
+        ))
+        .build()
+        .map_err(|_| "Could not initialize HTTPS client".into())
+}
+pub(crate) async fn api_json(
+    client: &reqwest::Client,
+    url: url::Url,
+    key: &str,
+) -> Result<serde_json::Value> {
     if key.trim().is_empty() {
         return Err("nexusApiKeyRequired".into());
     }
+    let endpoint = url.path().to_string();
     let mut response = client
         .get(url)
         .header("apikey", key.trim())
@@ -94,11 +122,24 @@ async fn api_json(client: &reqwest::Client, url: url::Url, key: &str) -> Result<
         .header("Application-Version", env!("CARGO_PKG_VERSION"))
         .send()
         .await
-        .map_err(|_| "Could not connect to Nexus API")?;
+        .map_err(|error| {
+            if error.is_timeout() {
+                "Nexus API request timed out"
+            } else {
+                "Could not connect to Nexus API (network/TLS/proxy)"
+            }
+        })?;
     if !response.status().is_success() {
+        let status = response.status().as_u16();
+        let hint = match status {
+            401 => "The saved API key was rejected.",
+            403 => "API access to this mod or account was denied.",
+            404 => "The mod/file is unavailable or was removed.",
+            429 => "Rate limit reached; try again later.",
+            _ => "Try again or check the service status.",
+        };
         return Err(format!(
-            "Nexus API returned HTTP {}. Check your Nexus connection and whether the NXM link has expired.",
-            response.status().as_u16()
+            "Nexus API returned HTTP {status} | GET {endpoint} | {hint}"
         ));
     }
     let mut bytes = vec![];
@@ -122,9 +163,9 @@ struct Progress {
 }
 #[derive(Serialize)]
 pub(crate) struct DownloadResult {
-    path: String,
-    bytes: u64,
-    can_import: bool,
+    pub(crate) path: String,
+    pub(crate) bytes: u64,
+    pub(crate) can_import: bool,
 }
 pub(crate) fn downloads_root(settings: &Settings) -> PathBuf {
     if settings.downloads_dir.is_empty() {
@@ -171,9 +212,6 @@ pub(crate) async fn download_nxm(
     state: tauri::State<'_, State>,
 ) -> Result<DownloadResult> {
     configure_tls();
-    if api_key.trim().is_empty() {
-        return Err("nexusApiKeyRequired".into());
-    }
     let (request, mut cancel) = {
         let requests = state.requests.lock().map_err(err)?;
         let request = requests
@@ -181,7 +219,10 @@ pub(crate) async fn download_nxm(
             .cloned()
             .ok_or("Link expired from this app session; paste it again")?;
         if requests.values().any(|other| {
-            other.info.mod_id == request.info.mod_id && other.active.load(Ordering::SeqCst)
+            other.info.provider == request.info.provider
+                && other.info.mod_id == request.info.mod_id
+                && other.info.slug == request.info.slug
+                && other.active.load(Ordering::SeqCst)
         }) {
             return Err("Another file of this mod is already downloading".into());
         }
@@ -194,10 +235,13 @@ pub(crate) async fn download_nxm(
     };
     let _active = ActiveDownload(request.active.clone());
     let root = downloads_root(&state.store.lock().map_err(err)?.settings);
-    let result = with_cancellation(
-        &mut cancel,
-        download_file(&request_id, &api_key, &request, &app, &root),
-    )
+    let result = with_cancellation(&mut cancel, async {
+        if request.info.provider == "curseforge" {
+            curseforge::download_file(&request_id, &api_key, &request.info, &app, &root).await
+        } else {
+            download_file(&request_id, &api_key, &request, &app, &root).await
+        }
+    })
     .await;
     if result.is_ok() {
         state.requests.lock().map_err(err)?.remove(&request_id);
@@ -234,17 +278,7 @@ async fn download_file(
             );
         }
     }
-    let client = reqwest::Client::builder()
-        .https_only(true)
-        .connect_timeout(Duration::from_secs(20))
-        .timeout(Duration::from_secs(60))
-        .redirect(reqwest::redirect::Policy::none())
-        .user_agent(concat!(
-            "inZOI-Better-Mod-Manager/",
-            env!("CARGO_PKG_VERSION")
-        ))
-        .build()
-        .map_err(|_| "Could not initialize HTTPS client")?;
+    let client = api_client()?;
     let metadata = api_json(&client, api_url(&request, false)?, &api_key).await?;
     let filename = metadata
         .get("file_name")
@@ -259,13 +293,11 @@ async fn download_file(
     if !["zip", "7z", "rar"].contains(&extension.as_str()) {
         return Err("This Nexus file is not a ZIP, 7z or RAR mod archive".into());
     }
-    let mod_metadata = if download_storage::find_mod(root, request.info.mod_id)?.is_none() {
-        api_json(&client, mod_api_url(&request.info)?, api_key)
-            .await
-            .unwrap_or(serde_json::Value::Null)
-    } else {
-        serde_json::Value::Null
-    };
+    // Every file/version needs the mod's image metadata, even when its parent
+    // mod folder already exists. Missing optional details must not block a file.
+    let mod_metadata = api_json(&client, mod_api_url(&request.info)?, api_key)
+        .await
+        .unwrap_or(serde_json::Value::Null);
     let title = mod_metadata
         .get("name")
         .and_then(|v| v.as_str())
@@ -303,7 +335,7 @@ async fn download_file(
         }))
         .build()
         .map_err(|_| "Could not initialize download client")?;
-    let mut response = downloader
+    let response = downloader
         .get(url)
         .send()
         .await
@@ -314,6 +346,29 @@ async fn download_file(
             response.status().as_u16()
         ));
     }
+    let mut record = super::metadata::download_record(&request.info, &metadata);
+    if !mod_metadata.is_null() {
+        record["mod"] = mod_metadata;
+    }
+    receive_archive(
+        request_id,
+        response,
+        pending,
+        record,
+        app,
+        extension == "zip",
+    )
+    .await
+}
+
+pub(crate) async fn receive_archive(
+    request_id: &str,
+    mut response: reqwest::Response,
+    pending: download_storage::PendingArchive,
+    record: serde_json::Value,
+    app: &tauri::AppHandle,
+    can_import: bool,
+) -> Result<DownloadResult> {
     const MAX: u64 = 8 * 1024 * 1024 * 1024;
     let total = response.content_length();
     if total.is_some_and(|n| n > MAX) {
@@ -346,15 +401,16 @@ async fn download_file(
             last = std::time::Instant::now();
         }
     }
-    if received == 0 || total.is_some_and(|n| n != received) {
+    if received == 0
+        || total.is_some_and(|n| n != received)
+        || record["file"]["fileLength"]
+            .as_u64()
+            .is_some_and(|n| n != received)
+    {
         return Err("The downloaded archive is incomplete".into());
     }
     file.sync_all().map_err(err)?;
     drop(file);
-    let mut record = super::metadata::download_record(&request.info, &metadata);
-    if !mod_metadata.is_null() {
-        record["mod"] = mod_metadata;
-    }
     let target = pending.finish(record, received, format!("{:x}", hasher.finalize()))?;
     let _ = app.emit(
         "nexus-download-progress",
@@ -367,7 +423,7 @@ async fn download_file(
     Ok(DownloadResult {
         path: target.to_string_lossy().into_owned(),
         bytes: received,
-        can_import: extension == "zip",
+        can_import,
     })
 }
 
@@ -444,12 +500,11 @@ mod tests {
         zip.write_all(b"mod payload").unwrap();
         zip.finish().unwrap();
         let info = parse_request("nxm://inzoi/mods/1/files/2").unwrap().info;
-        fs::write(
-            downloads.join(".inzoimm-nexus.json"),
-            super::super::metadata::download_record(&info, &serde_json::json!({"name":"Hair"}))
-                .to_string(),
-        )
-        .unwrap();
+        let image = "https://staticdelivery.nexusmods.com/mods/6919/images/1/preview.jpg";
+        let mut record =
+            super::super::metadata::download_record(&info, &serde_json::json!({"name":"Hair"}));
+        record["mod"] = serde_json::json!({"name":"Hair","picture_url":image});
+        fs::write(downloads.join(".inzoimm-nexus.json"), record.to_string()).unwrap();
         // A new default for future downloads must not move the file currently importing.
         let mut settings = state.store.lock().unwrap().settings.clone();
         settings.downloads_dir = root.join("future-downloads").to_string_lossy().into_owned();
@@ -469,6 +524,7 @@ mod tests {
             store: Mutex::new(state.store.lock().unwrap().clone()),
             pending: Mutex::new(vec![]),
             requests: Mutex::new(Default::default()),
+            mod_updates: Mutex::new(Default::default()),
         };
         fs::create_dir_all(&failed.file).unwrap();
         assert!(import_download_core(&archive.to_string_lossy(), &failed).is_err());
@@ -480,6 +536,7 @@ mod tests {
         let store = state.store.lock().unwrap();
         let m = &store.mods[0];
         assert!(m.managed && !m.enabled);
+        assert_eq!(m.thumbnail.as_deref(), Some(image));
         let download_root = download_root.canonicalize().unwrap();
         assert_eq!(
             Path::new(&m.path).parent().unwrap(),

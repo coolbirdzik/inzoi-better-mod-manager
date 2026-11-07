@@ -8,8 +8,10 @@
     "core:default",
     "dialog:allow-open",
     "dialog:allow-confirm",
-    "opener:allow-open-path",
-    "opener:allow-open-url",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{"url": "https://*"}, {"url": "http://*"}]
+    },
     "deep-link:default",
     "updater:default",
     "process:allow-restart"

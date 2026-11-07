@@ -5,6 +5,7 @@ export const normalizePath=(path:string)=>path.replace(/^\\\\\?\\/,'').replace(/
 export const pathKey=(path:string)=>{const p=normalizePath(path);return /^(?:[a-z]:|\/\/)/i.test(p)?p.toLowerCase():p};
 export const inside=(path:string,root:string)=>pathKey(path)===pathKey(root)||pathKey(path).startsWith(`${pathKey(root)}/`);
 export const folderName=(path:string)=>normalizePath(path).split('/').at(-1)||path;
+export const modFolder=(mod:Mod)=>mod.archive?normalizePath(mod.path).split('/').slice(0,-1).join('/'):mod.path;
 export const sourceFolders=(settings?:Settings|null):SourceFolder[]=>(settings?.source_dirs??[]).map(source=>typeof source==='string'?{path:source,scan_subfolders:true}:source);
 export type Folder={path:string;name:string;parent:string|null;root:string;count:number;kind:'game'|'managed'|'source'|'downloads'};
 
@@ -52,4 +53,20 @@ export function webLinks(mod:Mod):string[]{
  const game=fields.find(f=>/(?:^|\.)(?:gamename|gamedomain)$/i.test(f.key));
  if(id&&(!game||/^inzoi$/i.test(game.value)))links.add(`https://www.nexusmods.com/inzoi/mods/${id.value}`);
  return [...links];
+}
+
+
+export function modOrigin(mod:Mod):{kind:'nexus'|'curseforge'|'web'|'local';label:string;url?:string}{
+ const fields=metadataFields(mod.metadata);
+ const urlOrigin=(raw:string)=>{try{const url=new URL(raw);if(!['https:','http:'].includes(url.protocol)||url.username||url.password)return;const host=url.hostname.toLowerCase();if(host==='nexusmods.com'||host.endsWith('.nexusmods.com'))return{kind:'nexus' as const,label:'Nexus Mods',url:url.href};if(host==='curseforge.com'||host.endsWith('.curseforge.com'))return{kind:'curseforge' as const,label:'CurseForge',url:url.href};return{kind:'web' as const,label:host.replace(/^www\./,''),url:url.href}}catch{return}};
+ // Saved download provenance wins over links merely mentioned by a mod author.
+ for(const provider of ['nexus','curseforge'] as const){
+  if(fields.some(f=>f.key.startsWith(`${provider}.json.Download.`))){const link=fields.filter(f=>f.key.startsWith(`${provider}.json.Download.`)).map(f=>urlOrigin(f.value)).find(origin=>origin?.kind===provider);return{kind:provider,label:provider==='nexus'?'Nexus Mods':'CurseForge',url:link?.url}}
+ }
+ const source=urlOrigin(mod.source);if(source)return source;
+ const links=fields.filter(f=>/url$|website|homepage/i.test(f.key)).map(f=>urlOrigin(f.value)).filter(origin=>!!origin);
+ const known=links.find(origin=>origin.kind==='nexus'||origin.kind==='curseforge');if(known)return known;
+ if(fields.some(f=>f.key.startsWith('curseforge.json.')||f.key==='Game library.gameId'&&f.value==='88849'))return{kind:'curseforge',label:'CurseForge'};
+ if(fields.some(f=>/^meta\.ini\..*(?:modid|nexusmodid)$/i.test(f.key)&&/^\d+$/.test(f.value)))return{kind:'nexus',label:'Nexus Mods'};
+ return links[0]??{kind:'local',label:''};
 }

@@ -18,7 +18,7 @@ $v=$version.Split('.');$next="$($v[0]).$($v[1]).$([int]$v[2]+1)"
 $archive=Join-Path $fixture 'fixture.zip'
 Compress-Archive -LiteralPath $exe -DestinationPath $archive
 Push-Location $project
-try {npm run tauri -- signer sign --app-version $next $archive;if($LASTEXITCODE -ne 0){throw 'Fixture signing failed'}} finally {Pop-Location}
+try {pnpm run tauri signer sign --app-version $next $archive;if($LASTEXITCODE -ne 0){throw 'Fixture signing failed'}} finally {Pop-Location}
 $signature=(Get-Content "$archive.sig" -Raw).Trim()
 foreach($mode in @('valid','tampered')){
  $root=Join-Path $fixture $mode
