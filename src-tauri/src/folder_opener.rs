@@ -36,14 +36,23 @@ mod tests {
     #[test]
     fn directories_with_spaces_unicode_and_svg_suffixes_keep_their_exact_names() {
         let (root, _, _) = crate::lifecycle_tests::fixture();
-        for name in ["InZoi mod/Downloads", "Thư mục mod/Downloadssvg"] {
+        // macOS may resolve the temp directory's /var alias to /private/var.
+        // Normalize the root while still checking the exact selected folder names.
+        let resolved_root = root.canonicalize().unwrap();
+        let resolved_root = dunce::simplified(&resolved_root);
+        for name in [
+            "InZoi mod/Downloads",
+            "Thư mục mod/Downloadssvg",
+            "Thư mục mod/Preview.svg",
+        ] {
             let path = root.join(name);
             fs::create_dir_all(&path).unwrap();
-            assert_eq!(folder_path(&path.to_string_lossy()).unwrap(), path);
+            let expected = resolved_root.join(name);
+            assert_eq!(folder_path(&path.to_string_lossy()).unwrap(), expected);
             #[cfg(windows)]
             assert_eq!(
                 folder_path(&path.to_string_lossy().replace('\\', "/")).unwrap(),
-                path
+                expected
             );
         }
         fs::remove_dir_all(root).unwrap();
