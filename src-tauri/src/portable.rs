@@ -108,15 +108,21 @@ fn extract_executable(bytes: &[u8], destination: &Path) -> Result<()> {
 pub(crate) async fn update_portable(app: tauri::AppHandle) -> Result<bool> {
     use tauri_plugin_updater::UpdaterExt;
     let root = root().ok_or("This app is not running in portable mode")?;
-    let Some(update) = app
+    let checked = app
         .updater_builder()
         .target("windows-x86_64-portable")
+        .timeout(std::time::Duration::from_secs(20))
         .build()
         .map_err(err)?
         .check()
-        .await
-        .map_err(err)?
-    else {
+        .await;
+    let update = match checked {
+        Ok(update) => update,
+        Err(primary) => app_updates::check_fallback(&app, Some("windows-x86_64-portable"))
+            .await
+            .map_err(|fallback| format!("{primary}; GitHub API: {fallback}"))?,
+    };
+    let Some(update) = update else {
         return Ok(false);
     };
     let bytes = update.download(|_, _| {}, || {}).await.map_err(err)?;
@@ -260,6 +266,7 @@ mod tests {
                 scan_subfolders: true,
                 source_dirs: vec![],
                 downloads_dir: String::new(),
+                paks_dir: None,
             },
             mods: vec![],
             thumbnails: Default::default(),

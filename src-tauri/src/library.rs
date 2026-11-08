@@ -85,6 +85,15 @@ pub(crate) fn scan_sources(settings: &Settings) -> (Vec<Mod>, Vec<String>) {
             }
         }
     }
+    if !settings.paks().is_empty() {
+        let (found, issues) = legacy::scan(Path::new(settings.paks()));
+        warnings.extend(issues);
+        for m in found {
+            if seen.insert(PathBuf::from(&m.path)) {
+                mods.push(m);
+            }
+        }
+    }
     (mods, warnings)
 }
 

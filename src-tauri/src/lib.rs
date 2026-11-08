@@ -1,10 +1,14 @@
 mod portable;
 pub use portable::apply_from_cli;
+mod app_updates;
 mod credentials;
 mod curseforge;
+mod discovery;
+mod discovery_drives;
 mod download_catalogue;
 mod download_storage;
 mod folder_opener;
+mod legacy;
 mod library;
 mod metadata;
 mod mod_updates;
@@ -72,6 +76,14 @@ pub struct Settings {
     source_dirs: Vec<SourceFolder>,
     #[serde(default)]
     downloads_dir: String,
+    /// inZOI `Content/Paks/~mods`, home of legacy PAK mods. Empty disables them.
+    #[serde(default)]
+    paks_dir: Option<String>,
+}
+impl Settings {
+    fn paks(&self) -> &str {
+        self.paks_dir.as_deref().unwrap_or("")
+    }
 }
 fn deserialize_folder_path<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
@@ -115,6 +127,8 @@ pub struct Mod {
     superseded_by: Option<String>,
     #[serde(default)]
     added_at: u64,
+    #[serde(default)]
+    legacy: bool,
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct Store {
@@ -246,6 +260,7 @@ fn read_mod(folder: &Path, id: String, managed: bool) -> Result<Mod> {
         previous_version: None,
         superseded_by: None,
         added_at: path_added_at(folder),
+        legacy: false,
     };
     if m.thumbnail.is_none() {
         m.thumbnail = thumbnails::from_nexus(&m.metadata)
@@ -378,7 +393,14 @@ fn snapshot(app: tauri::AppHandle, state: tauri::State<State>) -> Result<Snapsho
             }
         }
     }
-    for root in [&s.settings.mods_dir, &s.settings.library_dir] {
+    for root in [
+        &s.settings.mods_dir,
+        &s.settings.library_dir,
+        s.settings.paks(),
+    ] {
+        if root.is_empty() {
+            continue;
+        }
         let _ = app.asset_protocol_scope().allow_directory(root, true);
     }
     let _ = app
@@ -465,6 +487,13 @@ fn save_settings(settings: Settings, state: tauri::State<State>) -> Result<()> {
 }
 fn save_settings_core(settings: Settings, state: &State) -> Result<()> {
     library::validate_sources(&settings)?;
+    legacy::validate(&settings)?;
+    let mut settings = settings;
+    if !settings.paks().is_empty() {
+        let paks = legacy::normalize(Path::new(settings.paks()))?;
+        let _ = fs::create_dir_all(&paks);
+        settings.paks_dir = Some(dunce::simplified(&paks).to_string_lossy().into_owned());
+    }
     if !Path::new(&settings.mods_dir).is_absolute()
         || !Path::new(&settings.library_dir).is_absolute()
     {
@@ -542,7 +571,7 @@ fn import_folder_to_library(
     let (mods, _) = scan_with_options(&src, recursive);
     if mods.is_empty() {
         return Err(
-            "No inZOI mod_manifest.json found. Legacy PAK mods are not yet supported.".into(),
+            "No inZOI mod_manifest.json found. Legacy PAK mods are managed in place from the ~mods folder set in Settings; they cannot be imported yet.".into(),
         );
     }
     let mut unique = std::collections::HashSet::new();
@@ -754,6 +783,11 @@ fn manage_catalogue_mod(id: String, state: &State) -> Result<String> {
 }
 
 fn set_mod_enabled_core(id: String, enabled: bool, state: &State) -> Result<String> {
+    if legacy::is_id(&id) {
+        let paks = state.store.lock().map_err(err)?.settings.paks().to_string();
+        legacy::set_enabled(Path::new(&paks), &id, enabled)?;
+        return Ok(id);
+    }
     let id = manage_catalogue_mod(id, state)?;
     set_managed_enabled(id.clone(), enabled, state)?;
     Ok(id)
@@ -864,6 +898,10 @@ fn set_managed_enabled(id: String, enabled: bool, state: &State) -> Result<()> {
     Ok(())
 }
 fn remove_mod_core(id: String, state: &State) -> Result<()> {
+    if legacy::is_id(&id) {
+        let paks = state.store.lock().map_err(err)?.settings.paks().to_string();
+        return legacy::remove(Path::new(&paks), &id);
+    }
     {
         let s = state.store.lock().map_err(err)?;
         if let Some(m) = library::catalogue(&s)
@@ -1251,6 +1289,7 @@ pub fn run() {
         );
     }
     tauri::Builder::default()
+        .manage(discovery::ScanState::default())
         .plugin(tauri_plugin_single_instance::init(|app, args, _| {
             for raw in args {
                 queue_link(app, &raw);
@@ -1274,11 +1313,16 @@ pub fn run() {
                 let docs = app.path().document_dir()?;
                 Store {
                     settings: Settings {
-                        mods_dir: docs.join("inZOI").join("Mods").to_string_lossy().into_owned(),
+                        mods_dir: docs
+                            .join("inZOI")
+                            .join("Mods")
+                            .to_string_lossy()
+                            .into_owned(),
                         library_dir: dir.join("library").to_string_lossy().into_owned(),
                         scan_subfolders: true,
                         source_dirs: vec![],
                         downloads_dir: String::new(),
+                        paks_dir: None,
                     },
                     mods: vec![],
                     thumbnails: Default::default(),
@@ -1322,6 +1366,12 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             snapshot,
+            app_updates::check_app_update_fallback,
+            discovery::discover_mods,
+            discovery::list_scan_drives,
+            discovery::cancel_discovery,
+            legacy::detect_paks_dir,
+            legacy::init_paks_dir,
             folder_opener::open_folder,
             set_mod_thumbnail,
             library::set_mod_tags,
@@ -1675,6 +1725,7 @@ mod lifecycle_tests {
                     scan_subfolders: true,
                     source_dirs: vec![],
                     downloads_dir: String::new(),
+                    paks_dir: None,
                 },
                 mods: vec![],
                 thumbnails: Default::default(),

@@ -102,6 +102,7 @@ fn item(sidecar: &Path, root: &Path) -> Result<Mod> {
         previous_version: None,
         superseded_by: None,
         added_at: path_added_at(&path),
+        legacy: false,
     })
 }
 

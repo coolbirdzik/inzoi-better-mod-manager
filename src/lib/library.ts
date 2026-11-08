@@ -5,13 +5,13 @@ export const normalizePath=(path:string)=>path.replace(/^\\\\\?\\/,'').replace(/
 export const pathKey=(path:string)=>{const p=normalizePath(path);return /^(?:[a-z]:|\/\/)/i.test(p)?p.toLowerCase():p};
 export const inside=(path:string,root:string)=>pathKey(path)===pathKey(root)||pathKey(path).startsWith(`${pathKey(root)}/`);
 export const folderName=(path:string)=>normalizePath(path).split('/').at(-1)||path;
-export const modFolder=(mod:Mod)=>mod.archive?normalizePath(mod.path).split('/').slice(0,-1).join('/'):mod.path;
+export const modFolder=(mod:Mod)=>mod.archive||mod.legacy?normalizePath(mod.path).split('/').slice(0,-1).join('/'):mod.path;
 export const sourceFolders=(settings?:Settings|null):SourceFolder[]=>(settings?.source_dirs??[]).map(source=>typeof source==='string'?{path:source,scan_subfolders:true}:source);
 export type Folder={path:string;name:string;parent:string|null;root:string;count:number;kind:'game'|'managed'|'source'|'downloads'};
 
 export function folders(settings:Settings|null|undefined,mods:Mod[]):Folder[]{
  if(!settings)return [];
- const roots:{path:string;kind:Folder['kind']}[]=[{path:settings.mods_dir,kind:'game'},{path:settings.library_dir,kind:'managed'},{path:downloadFolder(settings),kind:'downloads'},...sourceFolders(settings).map(source=>({path:source.path,kind:'source' as const}))];
+ const roots:{path:string;kind:Folder['kind']}[]=[{path:settings.mods_dir,kind:'game'},...(settings.paks_dir?[{path:settings.paks_dir,kind:'game' as const}]:[]),{path:settings.library_dir,kind:'managed'},{path:downloadFolder(settings),kind:'downloads'},...sourceFolders(settings).map(source=>({path:source.path,kind:'source' as const}))];
  for(const mod of mods){if(mod.library_root&&!roots.some(root=>inside(mod.library_root!,root.path)))roots.push({path:mod.library_root,kind:'managed'})}
  const result=new Map<string,Folder>();
  for(const root of roots){const path=normalizePath(root.path);if(!result.has(pathKey(path)))result.set(pathKey(path),{...root,path,name:folderName(path),parent:null,root:path,count:0})}

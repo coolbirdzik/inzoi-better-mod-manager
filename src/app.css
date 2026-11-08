@@ -135,3 +135,5 @@ main>header{height:56px}
 @media(max-width:640px){.mod-reader .mod-metadata,.mod-reader .metadata-fields{grid-template-columns:minmax(0,1fr)}.mod-reader-title h2{font-size:19px}.mod-reader-header{gap:12px}}
 
 .mod-reader-error{flex-shrink:0;margin:12px 24px 0;padding:10px 14px;background:#302320;border:1px solid #553832;border-radius:5px;color:#e4b3a7;font-size:12px;overflow-wrap:anywhere}
+
+.app-update-notice{background:#29251f;border-color:#514331;color:#d3bd96;gap:10px}.app-update-notice>span{min-width:0;flex:1}.app-update-notice strong{font-size:12px;font-weight:500}.app-update-notice small{display:block;font-size:11px;line-height:1.6;margin-top:4px}.app-update-notice .app-update-detail{color:var(--muted);max-height:55px;overflow:auto;overflow-wrap:anywhere}.app-update-notice>button{flex-shrink:0}
