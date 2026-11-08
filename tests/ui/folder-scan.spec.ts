@@ -39,11 +39,11 @@ test('settings preserve scan choice after folder selection and reload, and defau
  await desktop(page);await page.getByRole('button',{name:'Settings'}).click();
  const dialog=page.getByRole('dialog');const checkbox=dialog.getByRole('checkbox',{name:'Scan subfolders'});
  await expect(checkbox).toBeChecked();await checkbox.uncheck();
- await dialog.getByRole('button',{name:'Choose folder',exact:true}).last().click();
+ await dialog.getByRole('button',{name:'Choose folder',exact:true}).nth(1).click(); // mods, managed library, then legacy PAK folder
  await expect(checkbox).not.toBeChecked();
  await dialog.getByRole('button',{name:'Save settings',exact:true}).click();
  await expect(dialog).not.toBeVisible();
- expect(await page.evaluate(()=>(window as any).calls.find((c:any)=>c.cmd==='save_settings').args.settings)).toEqual({mods_dir:'C:/Mods',library_dir:'C:/ChosenMods',scan_subfolders:false});
+ expect(await page.evaluate(()=>(window as any).calls.find((c:any)=>c.cmd==='save_settings').args.settings)).toEqual({mods_dir:'C:/Mods',library_dir:'C:/ChosenMods',scan_subfolders:false,paks_dir:''});
  await page.reload();await page.getByRole('button',{name:'Settings'}).click();
  await expect(checkbox).not.toBeChecked();
  await page.keyboard.press('Escape');await page.getByRole('button',{name:'Add mod',exact:true}).click();
