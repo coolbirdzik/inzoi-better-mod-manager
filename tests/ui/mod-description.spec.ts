@@ -12,6 +12,7 @@ async function library(page:Page) {
    {id:'empty',name:'No Description',description:''},
   ].map(m=>({author:'Mira',version:'1.2',path:`C:/Library/${m.id}`,project:m.id,thumbnail:null,managed:true,enabled:false,source:'',tags:[],...m}));
   w.__TAURI_INTERNALS__={transformCallback:()=>1,invoke:async(cmd:string,args:any)=>{
+   if(cmd==='load_nexus_api_key'||cmd==='load_curseforge_api_key')return 'TEST_KEY';
    w.calls.push({cmd,args});
    if(cmd==='snapshot')return{mods:w.mods,settings:{mods_dir:'C:/Game/Mods',library_dir:'C:/Library',scan_subfolders:true},warnings:[]};
    if(cmd==='pending_links')return[];

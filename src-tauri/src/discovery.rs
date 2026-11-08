@@ -280,7 +280,11 @@ fn automatic_roots(
     // real local drives instead of probing every letter (slow for dead mounts).
     #[cfg(windows)]
     for drive in discovery_drives::roots().unwrap_or_default() {
-        add_root(&mut roots, drive.join("Vortex Mods").join("inzoi"), "vortex");
+        add_root(
+            &mut roots,
+            drive.join("Vortex Mods").join("inzoi"),
+            "vortex",
+        );
     }
     (roots, warnings)
 }
@@ -292,6 +296,10 @@ fn path_key(path: &Path) -> String {
     } else {
         raw.trim_end_matches('/').to_string()
     }
+}
+fn resolved_path(path: &Path) -> PathBuf {
+    let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    dunce::simplified(&resolved).to_path_buf()
 }
 fn inside(path: &Path, root: &Path) -> bool {
     let path = path_key(path);
@@ -567,7 +575,25 @@ fn discover_with_control(
         completed.insert(key);
         let _ = origin;
     }
-    let downloads = nexus::downloads_root(settings);
+    // Walked paths are canonical. Resolve hints and configured roots once too:
+    // macOS may expose the same folder through /var and /private/var aliases.
+    for (path, _) in &mut hints {
+        *path = resolved_path(path);
+    }
+    let mut covered_roots = vec![
+        resolved_path(Path::new(&settings.mods_dir)),
+        resolved_path(&nexus::downloads_root(settings)),
+    ];
+    if settings.scan_subfolders {
+        covered_roots.push(resolved_path(Path::new(&settings.library_dir)));
+    }
+    covered_roots.extend(
+        settings
+            .source_dirs
+            .iter()
+            .filter(|source| source.scan_subfolders)
+            .map(|source| resolved_path(Path::new(&source.path))),
+    );
     let mut groups: BTreeMap<String, DiscoveredFolder> = BTreeMap::new();
     for (path, name) in found {
         let hint = hints
@@ -578,13 +604,7 @@ fn discover_with_control(
             .map(|(path, origin)| (path.clone(), origin.clone()))
             .unwrap_or((path, "local".into()));
         let raw = dunce::simplified(&group).to_string_lossy().into_owned();
-        let already_added = inside(&group, Path::new(&settings.mods_dir))
-            || settings.scan_subfolders && inside(&group, Path::new(&settings.library_dir))
-            || inside(&group, &downloads)
-            || settings
-                .source_dirs
-                .iter()
-                .any(|source| source.scan_subfolders && inside(&group, Path::new(&source.path)));
+        let already_added = covered_roots.iter().any(|root| inside(&group, root));
         groups
             .entry(path_key(&group))
             .or_insert_with(|| DiscoveredFolder {
@@ -665,7 +685,11 @@ fn selected_drives(available: Vec<PathBuf>, chosen: Option<Vec<String>>) -> Resu
     };
     let picked: Vec<_> = available
         .into_iter()
-        .filter(|root| chosen.iter().any(|c| path_key(Path::new(c)) == path_key(root)))
+        .filter(|root| {
+            chosen
+                .iter()
+                .any(|c| path_key(Path::new(c)) == path_key(root))
+        })
         .collect();
     if picked.is_empty() {
         return Err("Choose at least one drive to scan".into());
@@ -854,7 +878,10 @@ mod tests {
             false,
             &mut control,
         );
-        assert_eq!(result.folders.iter().map(|f| f.mods.len()).sum::<usize>(), 1);
+        assert_eq!(
+            result.folders.iter().map(|f| f.mods.len()).sum::<usize>(),
+            1
+        );
         assert!(result.warnings.iter().all(|w| !w.contains("depth limit")));
         fs::remove_dir_all(root).unwrap();
     }
@@ -986,7 +1013,7 @@ mod tests {
         let result = discover(
             &settings,
             vec![
-                (root.clone(), "vortex".into()),
+                (root.join("game/.."), "vortex".into()),
                 (source.clone(), "local".into()),
             ],
         );
@@ -1005,7 +1032,7 @@ mod tests {
         fs::create_dir_all(&game).unwrap();
         fs::write(
             game.join("vortex.deployment.json"),
-            serde_json::json!({"gameId":"inzoi", "stagingPath":source.parent().unwrap()})
+            serde_json::json!({"gameId":"inzoi", "stagingPath":source.parent().unwrap().join(".")})
                 .to_string(),
         )
         .unwrap();
@@ -1025,13 +1052,49 @@ mod tests {
         copy_tree(&source, &external).unwrap();
         let path = external.parent().unwrap().to_path_buf();
         settings.source_dirs.push(SourceFolder {
-            path: path.to_string_lossy().into_owned(),
+            path: path.join(".").to_string_lossy().into_owned(),
             scan_subfolders: false,
         });
         let result = discover(&settings, vec![(path.clone(), "local".into())]);
         assert!(!result.folders[0].already_added);
         settings.source_dirs[0].scan_subfolders = true;
         assert!(discover(&settings, vec![(path, "local".into())]).folders[0].already_added);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn aliased_configured_roots_preserve_coverage_and_recursion_settings() {
+        let (root, state, source) = crate::lifecycle_tests::fixture();
+        let external = root.join("external");
+        copy_tree(&source, &external.join("Hair")).unwrap();
+        let alias = external.join(".").to_string_lossy().into_owned();
+        let original = state.store.lock().unwrap().settings.clone();
+        for kind in ["game", "library", "downloads", "source"] {
+            for recursive in [false, true] {
+                let mut settings = original.clone();
+                match kind {
+                    "game" => settings.mods_dir = alias.clone(),
+                    "library" => {
+                        settings.library_dir = alias.clone();
+                        settings.scan_subfolders = recursive;
+                    }
+                    "downloads" => settings.downloads_dir = alias.clone(),
+                    "source" => settings.source_dirs.push(SourceFolder {
+                        path: alias.clone(),
+                        scan_subfolders: recursive,
+                    }),
+                    _ => unreachable!(),
+                }
+                let result = discover(&settings, vec![(external.clone(), "local".into())]);
+                assert_eq!(result.folders.len(), 1);
+                assert_eq!(result.folders[0].mods.len(), 1);
+                assert_eq!(
+                    result.folders[0].already_added,
+                    matches!(kind, "game" | "downloads") || recursive,
+                    "{kind}, recursive={recursive}"
+                );
+            }
+        }
         fs::remove_dir_all(root).unwrap();
     }
 

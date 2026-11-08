@@ -10,6 +10,7 @@ async function library(page:Page,libraryDir='C:/Library'){
    {id:'hair',name:'Short Hair',project:'Hair',path:'D:/Collection/Hair/Short',managed:false,enabled:false,tags:[]}
   ].map(m=>({author:'Creator',version:'1.0',description:'Description',source:'',thumbnail:null,...m}));
   w.__TAURI_INTERNALS__={transformCallback:()=>++callback,invoke:async(cmd:string,args:any)=>{
+   if(cmd==='load_nexus_api_key'||cmd==='load_curseforge_api_key')return 'TEST_KEY';
    w.calls.push({cmd,args});
    if(cmd==='snapshot')return {mods:[...mods.filter((m:any)=>!m.path.startsWith('D:')||settings.source_dirs.some((source:any)=>{const path=typeof source==='string'?source:source.path;return path==='D:/Collection'&&(typeof source==='string'||source.scan_subfolders)})),...(w.extraMods??[])],settings,warnings:[]};
    if(cmd==='pending_links')return [];

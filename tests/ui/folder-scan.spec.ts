@@ -5,6 +5,7 @@ async function desktop(page:Page){
   const w=window as any;w.isTauri=true;w.calls=[];let callback=0;
   let settings=JSON.parse(localStorage.getItem('test.settings')||'null')??{mods_dir:'C:/Mods',library_dir:'C:/library',scan_subfolders:true};
   w.__TAURI_INTERNALS__={transformCallback:()=>++callback,invoke:async(cmd:string,args:any)=>{
+   if(cmd==='load_nexus_api_key'||cmd==='load_curseforge_api_key')return 'TEST_KEY';
    w.calls.push({cmd,args});
    if(cmd==='snapshot')return {mods:[],settings,warnings:[]};
    if(cmd==='pending_links')return [];

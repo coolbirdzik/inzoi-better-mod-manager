@@ -11,6 +11,7 @@ async function desktop(page:Page){
    {id:'game',name:'Installed Hair',project:'GameHair',path:'C:/Game/Mods/GameHair',managed:false,enabled:true}
   ].map(m=>({author:'Creator',version:'1',source:'',description:'',thumbnail:null,...m}));
   w.__TAURI_INTERNALS__={transformCallback:()=>++callback,invoke:async(cmd:string,args:any)=>{
+   if(cmd==='load_nexus_api_key'||cmd==='load_curseforge_api_key')return 'TEST_KEY';
    w.calls.push({cmd,args});
    if(cmd==='snapshot')return {mods,settings,warnings:[]};
    if(cmd==='pending_links')return [];

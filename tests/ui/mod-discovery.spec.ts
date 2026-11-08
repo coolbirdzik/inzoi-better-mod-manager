@@ -5,6 +5,7 @@ async function desktop(page:Page){
   const w=window as any;w.isTauri=true;w.calls=[];w.cancelledScans=[];let callback=0;
   let settings=JSON.parse(localStorage.getItem('discovery.settings')||'null')??{mods_dir:'C:/Game/Mods',library_dir:'C:/Library',scan_subfolders:true,source_dirs:[]};
   w.__TAURI_INTERNALS__={transformCallback:()=>++callback,invoke:async(cmd:string,args:any)=>{
+   if(cmd==='load_nexus_api_key'||cmd==='load_curseforge_api_key')return 'TEST_KEY';
    w.calls.push({cmd,args});
    if(cmd==='snapshot')return{settings,mods:settings.source_dirs.map((source:any,index:number)=>({id:String(index),name:source.path.includes('Vortex')?'Vortex Hair':'Local Outfit',project:`Project${index}`,author:'Creator',version:'1',description:'',path:`${source.path}/Mod`,thumbnail:null,managed:false,enabled:false,source:'',metadata:{}})),warnings:[]};
    if(cmd==='pending_links')return[];

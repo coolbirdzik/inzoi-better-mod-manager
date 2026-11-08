@@ -8,6 +8,7 @@ async function desktop(page:Page,initialSettings?:{library_dir:string;downloads_
   const mods:any[]=[];w.archives=JSON.parse(localStorage.getItem('downloads.archives')||'[]');
   w.emit=(event:string,payload:any)=>{for(const listener of w.listeners.filter((l:any)=>l.event===event))w.callbacks[listener.handler]({event,id:0,payload})};
   w.__TAURI_INTERNALS__={transformCallback:(fn:any)=>{w.callbacks[++callback]=fn;return callback},invoke:async(cmd:string,args:any)=>{
+   if(cmd==='load_nexus_api_key'||cmd==='load_curseforge_api_key')return 'TEST_KEY';
    w.calls.push({cmd,args});
    if(cmd==='plugin:event|listen'){w.listeners.push(args);return w.listeners.length;}
    if(cmd==='snapshot')return {mods:[...mods,...w.archives.filter((a:any)=>!mods.some(m=>m.path.startsWith(a.path.replace(/[^/]+$/,''))))],settings,warnings:[]};

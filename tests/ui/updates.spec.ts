@@ -3,6 +3,7 @@ async function mockDesktop(page:Page,portable=false,fail=false){
  await page.addInitScript(({portable,fail})=>{
   const w=window as any;w.isTauri=true;w.calls=[];let id=0;
   w.__TAURI_INTERNALS__={transformCallback:()=>++id,invoke:async(cmd:string,args:any)=>{
+   if(cmd==='load_nexus_api_key'||cmd==='load_curseforge_api_key')return 'TEST_KEY';
    w.calls.push({cmd,args});
    if(cmd==='snapshot')return {mods:[],settings:{mods_dir:'C:/test/Mods',library_dir:'C:/test/library'},warnings:[]};
    if(cmd==='pending_links')return w.pending??[];

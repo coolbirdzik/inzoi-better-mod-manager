@@ -89,16 +89,17 @@ test('CurseForge downloads use their own saved key, import disabled, and retain 
  await page.reload();await expect(card.locator('.mod-origin')).toHaveText('CurseForge');
 });
 
-test('a missing CurseForge key can be saved in the confirmation and cleared independently of Nexus',async({page})=>{
- const saved=await desktop(page,null);await paste(page,'https://www.curseforge.com/inzoi/mods/download-hair');
- const dialog=page.getByRole('dialog',{name:'Download from CurseForge',exact:true});
- await expect(dialog).toContainText('Latest release');
- await expect(dialog.getByRole('button',{name:'OK',exact:true})).toBeDisabled();
- await dialog.getByRole('button',{name:'Open CurseForge developer console',exact:true}).click();
- expect(await page.evaluate(()=>(window as any).calls.find((c:any)=>c.cmd==='plugin:opener|open_url').args.url)).toBe('https://console.curseforge.com/');
- await dialog.getByLabel('CurseForge API key',{exact:true}).fill(' CF_NEW_TEST_KEY ');
- await expect(dialog.getByRole('button',{name:'OK',exact:true})).toBeEnabled();
- await page.keyboard.press('Escape');await page.reload();await page.getByRole('button',{name:'Settings'}).click();
+test('a missing CurseForge key is requested at startup and can be cleared independently of Nexus',async({page})=>{
+ const saved=await desktop(page,null);
+ const onboarding=page.getByRole('dialog',{name:'Connect your accounts',exact:true});
+ await expect(onboarding.getByRole('button',{name:'Skip for now',exact:true})).toBeEnabled();
+ await onboarding.getByRole('button',{name:'Open CurseForge developer console',exact:true}).click();
+ expect(await page.evaluate(()=>(window as any).calls.find((c:any)=>c.cmd==='plugin:opener|open_url').args.url)).toBe('https://console.curseforge.com/#/api-keys');
+ await onboarding.getByLabel('CurseForge API key',{exact:true}).fill(' CF_NEW_TEST_KEY ');
+ await expect(onboarding.getByRole('button',{name:'Continue',exact:true})).toBeEnabled();
+ await onboarding.getByRole('button',{name:'Continue',exact:true}).click();
+ await expect.poll(()=>saved.curseforge).toBe('CF_NEW_TEST_KEY');
+ await page.reload();await page.getByRole('button',{name:'Settings'}).click();
  await expect(page.getByLabel('CurseForge API key',{exact:true})).toHaveValue('CF_NEW_TEST_KEY');
  await expect(page.getByLabel('Nexus API key',{exact:true})).toHaveValue('NEXUS_TEST_KEY');
  await page.getByRole('button',{name:'Clear CurseForge API key',exact:true}).click();

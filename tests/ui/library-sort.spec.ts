@@ -20,6 +20,7 @@ async function library(page:Page, options:{saved?:string;blockedStorage?:boolean
    if(cmd==='snapshot')return {mods:w.mods,settings:{mods_dir:'C:/Game/Mods',library_dir:'C:/Library',scan_subfolders:true},warnings:[]};
    if(cmd==='pending_links')return [];
    if(cmd==='load_nexus_api_key')return 'TEST_KEY';
+   if(cmd==='load_curseforge_api_key')return 'CF_TEST_KEY';
    if(cmd==='is_portable')return true;
    if(cmd==='update_portable')return false;
    if(cmd==='check_mod_update')return {id:args.id,provider:'nexus',mod_id:42,current_version:'1',latest_version:'2',status:w.available.includes(args.id)?'available':'upToDate',token:'token',file_id:2};

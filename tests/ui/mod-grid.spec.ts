@@ -5,6 +5,7 @@ async function library(page:Page) {
   const w=window as any;w.isTauri=true;w.calls=[];let callback=0;
   const mods=Array.from({length:12},(_,i)=>({id:`mod-${i}`,name:`Collection ${i+1}`,author:`Creator ${i+1}`,project:`Project_${i}`,version:'1.0',description:`Description ${i+1}`,path:`C:/Mods/${i}`,thumbnail:i===0?'preview.png':i===1?'broken.png':i===3?'https://media.forgecdn.net/avatars/mod.jpg':null,managed:i!==2,enabled:i%2===0,source:''}));
   w.__TAURI_INTERNALS__={transformCallback:()=>++callback,convertFileSrc:(path:string)=>`/test-images/${path}`,invoke:async(cmd:string,args:any)=>{
+   if(cmd==='load_nexus_api_key'||cmd==='load_curseforge_api_key')return 'TEST_KEY';
    w.calls.push({cmd,args});
    if(cmd==='snapshot')return {mods,settings:{mods_dir:'C:/Mods',library_dir:'C:/library'},warnings:[]};
    if(cmd==='pending_links')return [];
