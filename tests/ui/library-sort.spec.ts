@@ -78,8 +78,9 @@ test('sort modes persist across restart, layout, source, search and status chang
   await expect(sort(page)).toBeVisible();await expect(page.getByRole('button',{name:'Grid view',exact:true})).toBeVisible();
   const bounds=await sort(page).boundingBox(), panel=await page.locator('.workspace').boundingBox();
   expect(bounds!.x).toBeGreaterThanOrEqual(panel!.x);expect(bounds!.x+bounds!.width).toBeLessThanOrEqual(panel!.x+panel!.width);
-  const controls=await page.locator('.library-scopes>.source-scope,.library-scopes>.status-filter,.library-scopes>.library-sort,.library-toolbar>.view-switch').evaluateAll(nodes=>nodes.map(node=>{const r=node.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}}));
-  expect(controls).toHaveLength(4);
+  const controls=await page.locator('.library-scopes>.source-scope,.library-scopes>.status-filter,.library-scopes>.library-sort,.library-scopes>.tag-scope,.library-toolbar>.view-switch').evaluateAll(nodes=>nodes.map(node=>{const r=node.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}}));
+  // Source, status, sort, tags (the fixture has tags) and the view switch share one row.
+  expect(controls).toHaveLength(5);
   for(const [index,control] of controls.entries()) {
    expect(control.height).toBe(30);expect(control.y).toBe(controls[0].y);
    if(index)expect(control.x).toBeGreaterThanOrEqual(controls[index-1].x+controls[index-1].width);

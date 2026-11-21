@@ -306,5 +306,12 @@
   "pakModsHint": "레거시 PAK 모드는 inZOI의 Content/Paks/~mods 폴더에 있는 .pak 파일입니다. 감지로 게임을 찾거나 게임 폴더 또는 ~mods를 선택하세요. 비워 두면 꺼집니다.",
   "legacyPak": "레거시 PAK",
   "legacyNote": "이 레거시 PAK 모드는 게임의 ~mods 폴더에 그대로 남습니다. 비활성화하면 파일명에 _disabled가 붙고, 제거하면 Paks 옆의 .inzoimm-trash 폴더로 이동합니다. 변경하기 전에 inZOI를 종료하세요.",
-  "pakNotFound": "inZOI 설치를 찾을 수 없습니다. 게임 폴더 또는 ~mods를 선택하세요."
+  "pakNotFound": "inZOI 설치를 찾을 수 없습니다. 게임 폴더 또는 ~mods를 선택하세요.",
+  "groupByCategory": "카테고리별 그룹",
+  "categoryOutfits": "의상",
+  "categoryHairstyle": "헤어스타일",
+  "categoryFaceMakeup": "얼굴 및 메이크업",
+  "categoryAccessories": "액세서리",
+  "categoryGameplay": "게임플레이 및 스크립트",
+  "categoryOther": "기타"
 }

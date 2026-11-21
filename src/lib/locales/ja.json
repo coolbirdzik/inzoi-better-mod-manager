@@ -306,5 +306,12 @@
   "pakModsHint": "レガシーPAK Modは、inZOIのContent/Paks/~modsフォルダーにある.pakファイルです。検出でゲームを探すか、ゲームフォルダーまたは~modsを選択してください。空欄にすると無効になります。",
   "legacyPak": "レガシーPAK",
   "legacyNote": "このレガシーPAK Modはゲームの~modsフォルダーに残ります。無効にするとファイル名に_disabledが付き、削除するとPaksの隣の.inzoimm-trashフォルダーに移動します。変更する前にinZOIを終了してください。",
-  "pakNotFound": "inZOIのインストールが見つかりません。ゲームフォルダーまたは~modsを選択してください。"
+  "pakNotFound": "inZOIのインストールが見つかりません。ゲームフォルダーまたは~modsを選択してください。",
+  "groupByCategory": "カテゴリ別にグループ化",
+  "categoryOutfits": "衣装",
+  "categoryHairstyle": "ヘアスタイル",
+  "categoryFaceMakeup": "顔とメイク",
+  "categoryAccessories": "アクセサリー",
+  "categoryGameplay": "ゲームプレイとスクリプト",
+  "categoryOther": "その他"
 }

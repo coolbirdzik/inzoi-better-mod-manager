@@ -8,7 +8,8 @@
  import { check, Update } from '@tauri-apps/plugin-updater';
  import { relaunch } from '@tauri-apps/plugin-process';
  import { getCurrent } from '@tauri-apps/plugin-deep-link';
- import { IconSearch, IconPlus, IconRefresh, IconSettings, IconBox, IconFolder, IconArrowUpRight, IconDownload, IconTrash, IconPencil, IconCommand, IconX, IconChevronRight, IconLayoutGrid, IconList, IconPhoto, IconArrowLeft, IconArrowRight, IconInfoCircle, IconArrowsSort, IconMaximize } from '@tabler/icons-svelte';
+ import { IconSearch, IconPlus, IconRefresh, IconSettings, IconBox, IconFolder, IconArrowUpRight, IconDownload, IconTrash, IconPencil, IconCommand, IconX, IconChevronRight, IconLayoutGrid, IconList, IconPhoto, IconArrowLeft, IconArrowRight, IconInfoCircle, IconArrowsSort, IconMaximize, IconStack2, IconHistory, IconZoomScan, IconTag, IconFileZip } from '@tabler/icons-svelte';
+ import { modCategory, groupMods, type ModCategory, type CategoryKey } from './lib/categories';
  import ModThumbnail from './lib/ModThumbnail.svelte';
  import AppInfo from './lib/AppInfo.svelte';
  import NexusApiKey from './lib/NexusApiKey.svelte';
@@ -127,6 +128,13 @@
  let modSections=$state<Record<string,boolean>>({});
  let checkGeneration=0;
  const libraryMods=$derived((data?.mods??[]).filter(m=>!m.superseded_by));
+ const categoryLabels:Record<CategoryKey,TranslationKey>={outfits:'categoryOutfits',hairstyle:'categoryHairstyle',faceMakeup:'categoryFaceMakeup',accessories:'categoryAccessories',gameplay:'categoryGameplay',other:'categoryOther'};
+ function categoryLabel(category:ModCategory){return category.key?t(categoryLabels[category.key]):category.name??''}
+ const categories=$derived(new Map(libraryMods.map(m=>[m.id,modCategory(m)])));
+ const categoryOf=(mod:Mod)=>categories.get(mod.id)??modCategory(mod);
+ function initialGrouping(){try{return localStorage.getItem('inzoimm.groupByCategory')!=='false'}catch{return true}}
+ let groupByCategory=$state(initialGrouping());
+ function setGrouping(on:boolean){groupByCategory=on;try{localStorage.setItem('inzoimm.groupByCategory',String(on))}catch{/* Keep the session preference. */}}
  const modUpdateCount=$derived(libraryMods.filter(m=>modChecks[m.id]?.status==='available').length);
  const updateProjectId=(check:ModUpdate)=>check.mod_id;
  async function checkMods(mod?:Mod){
@@ -261,9 +269,13 @@
   return items;
  });
  function inGame(mod:Mod){return !!data&&(inside(mod.path,data.settings.mods_dir)||!!data.settings.paks_dir&&inside(mod.path,data.settings.paks_dir))}
- const filtered=$derived(sortLibrary(libraryMods.filter(m=>(filter==='all'||filter==='enabled'&&m.enabled||filter==='disabled'&&!m.enabled||filter==='updates'&&modChecks[m.id]?.status==='available')&&(!folder||(query.trim()||tagFilter?inside(m.path,folder):pathKey(normalizePath(m.path).split('/').slice(0,-1).join('/'))===pathKey(folder)||pathKey(m.path)===pathKey(folder)))&&(!tagFilter||(m.tags??[]).includes(tagFilter))&&`${m.name} ${m.author} ${m.project} ${m.path} ${(m.tags??[]).join(' ')}`.toLowerCase().includes(query.toLowerCase())),librarySort,modChecks,language.code));
+ const filtered=$derived(sortLibrary(libraryMods.filter(m=>(filter==='all'||filter==='enabled'&&m.enabled||filter==='disabled'&&!m.enabled||filter==='updates'&&modChecks[m.id]?.status==='available')&&(!folder||(query.trim()||tagFilter?inside(m.path,folder):pathKey(normalizePath(m.path).split('/').slice(0,-1).join('/'))===pathKey(folder)||pathKey(m.path)===pathKey(folder)))&&(!tagFilter||(m.tags??[]).includes(tagFilter))&&`${m.name} ${m.author} ${m.project} ${m.path} ${(m.tags??[]).join(' ')} ${categoryLabel(categoryOf(m))}`.toLowerCase().includes(query.toLowerCase())),librarySort,modChecks,language.code));
+ // Rendering, selection fallback and keyboard navigation all follow this one order.
+ const groups=$derived(groupByCategory?groupMods(filtered,categoryOf,categoryLabel,language.code):[{category:{id:''} as ModCategory,mods:filtered}]);
+ const ordered=$derived(groups.flatMap(group=>group.mods));
+ const showGroups=$derived(groups.length>1);
  const errorMessage=$derived(['desktopRequired','nexusApiKeyRequired','nexusKeyLoadFailed','nexusKeySaveFailed','curseforgeKeyLoadFailed','curseforgeKeySaveFailed','curseforgeApiKeyRequired'].includes(error)?t(error as TranslationKey):error);
- const active=$derived(filtered.find(m=>m.id===selected)??filtered[0]);
+ const active=$derived(ordered.find(m=>m.id===selected)??ordered[0]);
  async function run(action:()=>Promise<void>){if(busy||updating)return false;busy=true;error='';message='';try{await action();return true}catch(e){error=String(e);return false}finally{busy=false}}
  async function refresh(){data=await invoke<Snapshot>('snapshot')}
  async function add(){await run(async()=>{const p=await open({directory:true,multiple:false,title:t('chooseImportFolder')});if(p){addingSource=false;importPath=p;importRecursive=data?.settings.scan_subfolders??true;importOpen=true}})}
@@ -302,11 +314,17 @@
  function focusDialog(node:HTMLElement){const previous=document.activeElement as HTMLElement|null;const controls=()=>Array.from(node.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),textarea:not(:disabled),select:not(:disabled),[tabindex="0"]')).filter(el=>el.offsetParent!==null);queueMicrotask(()=>(node.querySelector<HTMLElement>('[data-autofocus]:not(:disabled)')??controls()[0])?.focus());const trap=(e:KeyboardEvent)=>{if(e.key!=='Tab')return;const all=controls();if(!all.length){e.preventDefault();return}const first=all[0],last=all[all.length-1];if(e.shiftKey&&(document.activeElement===first||document.activeElement===node||!node.contains(document.activeElement))){e.preventDefault();last.focus()}else if(!e.shiftKey&&(document.activeElement===last||!node.contains(document.activeElement))){e.preventDefault();first.focus()}};node.addEventListener('keydown',trap);return{destroy(){node.removeEventListener('keydown',trap);if(previous?.isConnected)previous.focus()}};}
  function openSettings(){if(updating||onboardingOpen)return;closeDiscovery();metadataOpen=false;checkLogsOpen=false;draft=data?{...data.settings,scan_subfolders:data.settings.scan_subfolders??true}:null;editOpen=false;dismissLink();downloadsOpen=false;importOpen=false;settingsOpen=true;queueMicrotask(()=>document.querySelector<HTMLInputElement>('.modal input')?.focus());}
  function keyboard(e:KeyboardEvent){if(e.altKey&&['ArrowLeft','ArrowRight'].includes(e.key)){e.preventDefault();historyMove(e.key==='ArrowLeft'?-1:1);return}if(context)return;if((e.ctrlKey||e.metaKey)&&e.key===','){e.preventDefault();openSettings();return}if((e.ctrlKey||e.metaKey)&&e.key==='k'){e.preventDefault();if(!settingsOpen&&!editOpen&&!linkOpen&&!importOpen&&!downloadsOpen&&!checkLogsOpen&&!metadataOpen&&!discoveryOpen)input?.focus();return}if(e.key==='Escape'){closeDiscovery();settingsOpen=false;dismissLink();editOpen=false;importOpen=false;downloadsOpen=false;checkLogsOpen=false;metadataOpen=false}if(settingsOpen||editOpen||linkOpen||importOpen||downloadsOpen||checkLogsOpen||metadataOpen||discoveryOpen||sourcesView)return;if(e.target instanceof HTMLInputElement||e.target instanceof HTMLTextAreaElement||e.target instanceof HTMLSelectElement)return;if(['ArrowDown','ArrowUp',...(view==='grid'?['ArrowLeft','ArrowRight']:[])].includes(e.key)){
-  e.preventDefault();const i=filtered.findIndex(m=>m.id===active?.id);
+  e.preventDefault();const i=ordered.findIndex(m=>m.id===active?.id);
   const cards=Array.from(modItems?.querySelectorAll<HTMLButtonElement>('.mod-row')??[]);
-  const columns=view==='grid'?(cards.filter(card=>card.getBoundingClientRect().top===cards[0]?.getBoundingClientRect().top).length||1):1;
-  const step=e.key==='ArrowDown'?columns:e.key==='ArrowUp'?-columns:e.key==='ArrowRight'?1:-1;
-  const next=Math.max(0,Math.min(filtered.length-1,i+step));selected=filtered[next]?.id??'';
+  let next=i<0?0:i+(e.key==='ArrowDown'||e.key==='ArrowRight'?1:-1);
+  // Category groups start new rows, so move to the nearest card on the next visual row.
+  if(view==='grid'&&i>=0&&cards[i]&&(e.key==='ArrowDown'||e.key==='ArrowUp')){
+   const from=cards[i].getBoundingClientRect(),down=e.key==='ArrowDown',centre=from.left+from.width/2;
+   const candidates=cards.map((card,index)=>({index,rect:card.getBoundingClientRect()})).filter(({rect})=>down?rect.top>from.top+1:rect.top<from.top-1);
+   const row=candidates.length?(down?Math.min:Math.max)(...candidates.map(c=>c.rect.top)):from.top;
+   next=candidates.filter(c=>c.rect.top===row).sort((a,b)=>Math.abs(a.rect.left+a.rect.width/2-centre)-Math.abs(b.rect.left+b.rect.width/2-centre))[0]?.index??i;
+  }
+  next=Math.max(0,Math.min(ordered.length-1,next));selected=ordered[next]?.id??'';
   cards[next]?.scrollIntoView({block:'nearest'});
   if(e.target instanceof HTMLElement&&e.target.closest('.mod-row'))cards[next]?.focus();
  }}
@@ -316,21 +334,18 @@
  <aside>
   <div class="aside-content">
   <div class="brand"><img src="/app-icon.png" alt=""/><div>inZOI<span>Better Mod Manager</span></div></div>
-  <div class="section-label">{t('library')}</div>
   <button class:chosen={!sourcesView} onclick={()=>chooseFilter('all')}><IconBox size={18}/>{t('allMods')}<span class="all-mods-counts"><small>{libraryMods.length}</small>{#if modUpdateCount}<small class="mod-update-count" aria-label={t('modUpdatesFilter',{count:modUpdateCount})} title={t('modUpdatesFilter',{count:modUpdateCount})}>{modUpdateCount}</small>{/if}</span></button>
-  <button disabled={checkingMods||updating||!data||!nexusKeyReady||!curseforgeKeyReady} onclick={()=>checkMods()}><IconRefresh size={18} class={checkingMods?'spin':''}/>{t(checkingMods?'checkingModUpdates':'checkModUpdates')}{#if modUpdateCount}<small>{modUpdateCount}</small>{/if}</button>
-  <button class="check-log-link" disabled={updating} onclick={openCheckLog}>{t('viewCheckLog')}</button>
-  {#if modChecksDone}<span class="update-status" role="status">{t('modCheckSummary',{count:modUpdateCount,failed:libraryMods.filter(m=>!!modCheckErrors[m.id]).length})}</span>{/if}
-  <label class="tag-filter">{t('tags')}<select aria-label={t('filterTags')} bind:value={tagFilter}><option value="">{t('allTags')}</option>{#each allTags as tag}<option value={tag}>{tag}</option>{/each}</select></label>
-  <div class="section-label space">{t('connections')}</div>
-  <button onclick={()=>void updates()} disabled={busy||updating||checkingApp||processing||pendingCount>0}><IconDownload size={18}/>{t('appUpdates')}</button><span class="update-status">{t(updateStatus,{version:update?.version??''})}</span>
-  <AppInfo/>
+  <div class="aside-row">
+   <button class="aside-row-main" title={modChecksDone?t('modCheckSummary',{count:modUpdateCount,failed:libraryMods.filter(m=>!!modCheckErrors[m.id]).length}):undefined} disabled={checkingMods||updating||!data||!nexusKeyReady||!curseforgeKeyReady} onclick={()=>checkMods()}><IconRefresh size={18} class={checkingMods?'spin':''}/><span class="aside-row-label">{t(checkingMods?'checkingModUpdates':'checkModUpdates')}</span>{#if modUpdateCount}<small>{modUpdateCount}</small>{/if}</button>
+   <button class="icon check-log-link" aria-label={t('viewCheckLog')} title={t('viewCheckLog')} disabled={updating} onclick={openCheckLog}><IconHistory size={16}/></button>
   </div>
-  <div class="aside-bottom"><button class="downloads-button" bind:this={downloadsButton} class:chosen={downloadsOpen} disabled={updating} onclick={openDownloads}><IconDownload size={18}/>{t('downloads')}{#if pendingCount}<small class="download-count">{pendingCount}</small>{:else if jobs.some(job=>job.status==='failed'||job.status==='importFailed')}<small class="download-count" aria-label={t('downloadFailed')}>!</small>{/if}</button><div class="game"><span class="game-dot"></span><div>inZOI<small>{t('localLibraryHint')}</small></div></div><button disabled={updating} onclick={openSettings}><IconSettings size={18}/>{t('settings')}{#if missingKeys&&nexusKeyReady&&curseforgeKeyReady}<small class="download-count key-badge" role="status" aria-label={t('keysMissingBadge',{count:missingKeys})} title={t('keysMissingBadge',{count:missingKeys})}>{missingKeys}</small>{/if}<kbd>Ctrl ,</kbd></button></div>
+  </div>
+  <div class="aside-bottom"><button class="downloads-button" bind:this={downloadsButton} class:chosen={downloadsOpen} disabled={updating} onclick={openDownloads}><IconDownload size={18}/>{t('downloads')}{#if pendingCount}<small class="download-count">{pendingCount}</small>{:else if jobs.some(job=>job.status==='failed'||job.status==='importFailed')}<small class="download-count" aria-label={t('downloadFailed')}>!</small>{/if}</button><button disabled={updating} title="Ctrl ," onclick={openSettings}><IconSettings size={18}/>{t('settings')}{#if missingKeys&&nexusKeyReady&&curseforgeKeyReady}<small class="download-count key-badge" role="status" aria-label={t('keysMissingBadge',{count:missingKeys})} title={t('keysMissingBadge',{count:missingKeys})}>{missingKeys}</small>{/if}</button>
+   <div class="aside-meta"><button class="app-update-button" aria-label={t('appUpdates')} title={`${t('appUpdates')}: ${t(updateStatus,{version:update?.version??''})}`} onclick={()=>void updates()} disabled={busy||updating||checkingApp||processing||pendingCount>0}><IconRefresh size={13} class={checkingApp?'spin':''}/><span class="update-status" class:sr-only={updateStatus==='upToDate'||updateStatus==='checkingUpdates'}>{t(updateStatus,{version:update?.version??''})}</span></button><AppInfo/></div></div>
  </aside>
  <main>
-  <header><div class="navigation-buttons" role="group" aria-label={t('navigation')}><button class="icon" title={t('back')} aria-label={t('back')} disabled={!canBack||updating} onclick={()=>historyMove(-1)}><IconArrowLeft size={18}/></button><button class="icon" title={t('forward')} aria-label={t('forward')} disabled={!canForward||updating} onclick={()=>historyMove(1)}><IconArrowRight size={18}/></button></div><div class="search"><IconSearch size={20}/><input bind:this={input} value={sourcesView?sourceQuery:query} oninput={e=>{if(sourcesView)sourceQuery=e.currentTarget.value;else query=e.currentTarget.value}} placeholder={t(sourcesView?'searchSources':'searchPlaceholder')} aria-label={t(sourcesView?'searchSources':'search')}/>{#if sourcesView&&sourceQuery}<button class="icon" aria-label={t('clearSourceSearch')} onclick={()=>sourceQuery=''}><IconX size={15}/></button>{/if}<kbd>Ctrl K</kbd></div><button class="icon" title={t('refresh')} disabled={busy||updating} onclick={()=>void run(refresh)}><IconRefresh size={18} class={busy?'spin':''}/></button></header>
-  <div class="page-title managed-title"><div class="library-heading"><h1 title={sourcesView?t('sourceFolders'):folder?currentFolder?.name??folderName(folder):t('yourLibrary')}>{sourcesView?t('sourceFolders'):folder?currentFolder?.name??folderName(folder):t('yourLibrary')}</h1><p>{sourcesView?t('sourceCount',{count:managedRoots.length}):t('folderModCount',{count:filtered.length})}</p>{#if !sourcesView}<button class="icon library-help" aria-label={t('managedCollectionHint')}><IconInfoCircle size={16}/><span class="library-help-tooltip" aria-hidden="true">{t('managedCollectionHint')}</span></button>{/if}</div><div class="actions"><button disabled={busy||updating||!data} onclick={openDiscovery}><IconSearch size={17}/>{t('scanComputer')}</button>{#if sourcesView}<button class="primary" disabled={busy||updating||!data} onclick={addSource}><IconPlus size={17}/>{t('addSource')}</button>{:else}<button disabled={busy||updating||!data} onclick={addZip}><IconDownload size={16}/>{t('importZip')}</button><button class="primary" disabled={busy||updating||!data} onclick={add}><IconPlus size={17}/>{t('addMod')}</button>{/if}</div></div>
+  <header><div class="navigation-buttons" role="group" aria-label={t('navigation')}><button class="icon" title={t('back')} aria-label={t('back')} disabled={!canBack||updating} onclick={()=>historyMove(-1)}><IconArrowLeft size={18}/></button><button class="icon" title={t('forward')} aria-label={t('forward')} disabled={!canForward||updating} onclick={()=>historyMove(1)}><IconArrowRight size={18}/></button></div><div class="search"><IconSearch size={20}/><input bind:this={input} title="Ctrl K" value={sourcesView?sourceQuery:query} oninput={e=>{if(sourcesView)sourceQuery=e.currentTarget.value;else query=e.currentTarget.value}} placeholder={t(sourcesView?'searchSources':'searchPlaceholder')} aria-label={t(sourcesView?'searchSources':'search')}/>{#if sourcesView&&sourceQuery}<button class="icon" aria-label={t('clearSourceSearch')} onclick={()=>sourceQuery=''}><IconX size={15}/></button>{/if}</div><button class="icon" title={t('refresh')} disabled={busy||updating} onclick={()=>void run(refresh)}><IconRefresh size={18} class={busy?'spin':''}/></button></header>
+  <div class="page-title managed-title"><div class="library-heading"><h1 title={sourcesView?t('sourceFolders'):folder?currentFolder?.name??folderName(folder):t('yourLibrary')}>{sourcesView?t('sourceFolders'):folder?currentFolder?.name??folderName(folder):t('yourLibrary')}</h1><p>{sourcesView?t('sourceCount',{count:managedRoots.length}):t('folderModCount',{count:filtered.length})}</p>{#if !sourcesView}<button class="icon library-help" aria-label={t('managedCollectionHint')}><IconInfoCircle size={16}/><span class="library-help-tooltip" aria-hidden="true">{t('managedCollectionHint')}</span></button>{/if}</div><div class="actions"><button class="icon" aria-label={t('scanComputer')} title={t('scanComputer')} disabled={busy||updating||!data} onclick={openDiscovery}><IconZoomScan size={17}/></button>{#if sourcesView}<button class="primary" disabled={busy||updating||!data} onclick={addSource}><IconPlus size={17}/>{t('addSource')}</button>{:else}<button class="icon" aria-label={t('importZip')} title={t('importZip')} disabled={busy||updating||!data} onclick={addZip}><IconFileZip size={17}/></button><button class="primary" disabled={busy||updating||!data} onclick={add}><IconPlus size={17}/>{t('addMod')}</button>{/if}</div></div>
   {#if modChecksDone&&libraryMods.some(m=>!!modCheckErrors[m.id])}<div class="notice error check-log-notice"><span>{t('checkLogFailedCount',{count:libraryMods.filter(m=>!!modCheckErrors[m.id]).length})}</span><button onclick={openCheckLog}>{t('viewCheckLog')}</button></div>{/if}
   {#if appUpdateError}<div class="notice app-update-notice" role="status" aria-label={t('appUpdates')}><span><strong>{t(updateStatus)}</strong><small>{t('appUpdateLibraryAvailable')}</small><small class="app-update-detail">{appUpdateError}</small></span><button disabled={busy||updating||checkingApp||processing||pendingCount>0} onclick={()=>void updates()}>{t('retryAppUpdate')}</button><button class="icon" aria-label={t('close')} onclick={()=>appUpdateError=''}><IconX size={16}/></button></div>{/if}
   {#if error}<div class="notice error" role="alert">{t('operationFailed')}: {errorMessage}<button class="icon" onclick={()=>error=''} aria-label={t('closeError')}><IconX size={16}/></button></div>{/if}
@@ -341,12 +356,15 @@
   {#if sourcesView}<div class="sources-workspace" id="managed-sources-panel" role="tabpanel" aria-labelledby="managed-sources-tab"><SourceManager sources={sourceRows} search={sourceQuery} disabled={busy||updating} contextAction={contextTarget} onbrowse={browse} onopen={path=>void run(async()=>{await openFolder(path)})} onremove={path=>void removeSource(path)} onscan={changeSourceScan}/></div>{:else}
   <div class="workspace" id="managed-mods-panel" role="tabpanel" aria-labelledby="managed-mods-tab">
   <div class="library-toolbar">
-   <div class="library-scopes">
+   <div class="library-scopes" class:has-tags={allTags.length>0}>
     <div class="source-scope"><IconFolder size={14}/><select aria-label={t('browseSource')} value={currentFolder?.root??''} onchange={e=>{if(e.currentTarget.value)browse(e.currentTarget.value);else navigate({folder:'',selected:'',manageSources:false})}}><option value="">{t('allSources')}</option>{#each folderTree.filter(f=>f.parent===null) as root}<option value={root.path}>{rootLabel(root)}</option>{/each}</select></div>
     <select class="status-filter" aria-label={t('status')} title={t('status')} value={filter} onchange={e=>navigate({filter:e.currentTarget.value})}><option value="all">{t('allMods')}</option><option value="enabled">{t('enabled')}</option><option value="disabled">{t('disabled')}</option><option value="updates">{t('modUpdatesFilter',{count:modUpdateCount})}</option></select>
     <div class="library-sort" title={t('sortBy')}><IconArrowsSort size={14}/><select aria-label={t('sortBy')} value={librarySort} onchange={e=>setLibrarySort(e.currentTarget.value as LibrarySort)}><option value="recommended">{t('sortRecommended')}</option><option value="newest">{t('sortNewest')}</option><option value="oldest">{t('sortOldest')}</option><option value="nameAsc">{t('sortNameAsc')}</option><option value="nameDesc">{t('sortNameDesc')}</option></select></div>
+    {#if allTags.length}<div class="tag-scope" class:active={!!tagFilter} title={t('filterTags')}><IconTag size={14}/><select aria-label={t('filterTags')} bind:value={tagFilter}><option value="">{t('allTags')}</option>{#each allTags as tag}<option value={tag}>{tag}</option>{/each}</select></div>{/if}
    </div>
    <div class="view-switch" role="group" aria-label={t('viewLayout')}>
+    <button class="icon group-toggle" class:chosen={groupByCategory} aria-label={t('groupByCategory')} title={t('groupByCategory')} aria-pressed={groupByCategory} onclick={()=>setGrouping(!groupByCategory)}><IconStack2 size={16}/></button>
+    <span class="view-switch-divider" aria-hidden="true"></span>
     <button class="icon" class:chosen={view==='grid'} aria-label={t('gridView')} title={t('gridView')} aria-pressed={view==='grid'} onclick={()=>setView('grid')}><IconLayoutGrid size={16}/></button>
     <button class="icon" class:chosen={view==='list'} aria-label={t('listView')} title={t('listView')} aria-pressed={view==='list'} onclick={()=>setView('list')}><IconList size={16}/></button>
    </div>
@@ -355,15 +373,18 @@
   {#if folder}<div class="folder-breadcrumb"><button onclick={()=>navigate({folder:'',selected:''})}>{t('allMods')}</button><IconChevronRight size={12}/><span title={folder}>{folder}</span>{#if currentFolder?.parent}<button class="icon" title={t('parentFolder')} aria-label={t('parentFolder')} onclick={()=>browse(currentFolder!.parent!)}>↑</button>{/if}</div>{/if}
   {#if !query.trim()&&!tagFilter&&folder&&childFolders.length}<div class="folder-cards">{#each childFolders as entry}<button title={entry.path} use:contextTarget={{kind:'folder',path:entry.path}} onclick={()=>browse(entry.path)}><IconFolder size={23}/><span>{entry.parent===null?rootLabel(entry):entry.name}<small>{t('folderModCount',{count:entry.count})}</small></span><IconChevronRight size={14}/></button>{/each}</div>{/if}
   <div class="mod-items" class:mod-grid={view==='grid'} bind:this={modItems}>
-  {#each filtered as mod (mod.id)}
+  {#each groups as group (group.category.id)}
+  {#if showGroups}<h3 class="mod-group-head"><span>{categoryLabel(group.category)}</span><small>{group.mods.length}</small></h3>{/if}
+  {#each group.mods as mod (mod.id)}
    {@const origin=modOrigin(mod)}
    <div class="mod-card"><button class="mod-row" use:contextTarget={{kind:'mod',id:mod.id}} class:selected={active?.id===mod.id} aria-pressed={active?.id===mod.id} onclick={()=>selected=mod.id}>
     <div class="thumb"><ModThumbnail path={mod.thumbnail} name={mod.name||mod.project} large={view==='grid'}/></div>
-    <div class="mod-title"><strong title={mod.name||mod.project}>{mod.name||mod.project}</strong><span>{mod.author||t('unknownAuthor')}</span><span class="mod-origin" data-provider={origin.kind} title={`${t('modSource')}: ${origin.label||t('localFiles')}`}>{mod.legacy?t('legacyPak'):origin.label||t('localFiles')}</span>{#if modChecks[mod.id]?.status==='available'}<span class="mod-update-badge">{t('modUpdateAvailable')} · {modChecks[mod.id]?.latest_version||t('latestRelease')}</span>{/if}{#if mod.tags?.length}<span class="mod-tags" title={mod.tags.join(' · ')}>{mod.tags.join(' · ')}</span>{/if}</div>
-    <span class:enabled={mod.enabled} class="status">{mod.archive?t('downloadedArchive'):mod.enabled?t('enabled'):t('disabled')}</span>
+    <div class="mod-title"><strong title={mod.name||mod.project}>{mod.name||mod.project}</strong><span>{mod.author||t('unknownAuthor')}</span><span class="mod-origin" class:sr-only={origin.kind==='local'&&!mod.legacy} data-provider={origin.kind} title={`${t('modSource')}: ${origin.label||t('localFiles')}`}>{mod.legacy?t('legacyPak'):origin.label||t('localFiles')}</span>{#if modChecks[mod.id]?.status==='available'}<span class="mod-update-badge" title={`${t('modUpdateAvailable')} · ${modChecks[mod.id]?.latest_version||t('latestRelease')}`}>{t('modUpdateAvailable')}</span>{/if}{#if mod.tags?.length}<span class="mod-tags" title={mod.tags.join(' · ')}>{mod.tags.join(' · ')}</span>{/if}</div>
+    <span class:enabled={mod.enabled} class="status" class:sr-only={!mod.archive}>{mod.archive?t('downloadedArchive'):mod.enabled?t('enabled'):t('disabled')}</span>
    </button>
    {#if !mod.archive}<button class="mod-toggle" role="switch" aria-checked={mod.enabled} aria-label={`${t(mod.enabled?'disableMod':'enableMod')}: ${mod.name||mod.project}`} title={t(mod.enabled?'disableMod':'enableMod')} disabled={busy||updating} onclick={()=>toggle(mod)}><span></span></button>{/if}
    </div>
+  {/each}
   {/each}
   </div>
   {#if filtered.length===0&&(!childFolders.length||query.trim()||tagFilter)}<div class="empty"><IconBox size={42} stroke={1}/><h2>{query?t('noResults'):t('emptyTitle')}</h2><p>{query?t('noResultsHint'):t('emptyHint')}</p>{#if !query}<button onclick={add} disabled={!data||busy}>{t('chooseModFolder')} <IconArrowUpRight size={16}/></button>{/if}</div>{/if}
@@ -420,7 +441,7 @@
    </section>
   </ResizableInspector></div>
   {/if}
-  <footer><span><span class="game-dot"></span>{updating?t('applyingUpdate'):busy?t('working'):t('localLibrary')}</span><span><kbd>↑</kbd><kbd>↓</kbd> {t('navigate')} <kbd>Ctrl K</kbd> {t('search')}</span></footer>
+  <footer><span><span class="game-dot" class:busy={busy||updating}></span>{updating?t('applyingUpdate'):busy?t('working'):t('localLibrary')}</span></footer>
  </main>
 </div>
 {#if settingsOpen||editOpen||linkOpen||importOpen}<div class="overlay"><div class="modal" use:focusDialog role="dialog" aria-modal="true" aria-label={settingsOpen?t('settings'):editOpen?t('editMod'):importOpen?t(addingSource?'addSource':'importFolder'):t(nexus?.provider==='curseforge'?'confirmCurseforgeDownload':'confirmNexusDownload')} tabindex="-1"><div class="modal-head"><h2>{settingsOpen?t('librarySettings'):editOpen?t('editMod'):importOpen?t(addingSource?'addSource':'importFolder'):t(nexus?.provider==='curseforge'?'confirmCurseforgeDownload':'confirmNexusDownload')}</h2><button class="icon" onclick={()=>{settingsOpen=false;editOpen=false;dismissLink();importOpen=false}} aria-label={t('close')}><IconX size={20}/></button></div>

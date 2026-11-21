@@ -306,5 +306,12 @@
   "pakModsHint": "Los mods PAK heredados son archivos .pak en la carpeta Content/Paks/~mods de inZOI. Detectar localiza el juego, o elige la carpeta del juego o ~mods. Déjalo vacío para desactivarlo.",
   "legacyPak": "PAK heredado",
   "legacyNote": "Este mod PAK heredado permanece en la carpeta ~mods del juego. Al desactivarlo se añade el sufijo _disabled a sus archivos; al eliminarlo pasa a la carpeta .inzoimm-trash junto a Paks. Cierra inZOI antes de cambiarlo.",
-  "pakNotFound": "No se encontró una instalación de inZOI. Elige la carpeta del juego o ~mods."
+  "pakNotFound": "No se encontró una instalación de inZOI. Elige la carpeta del juego o ~mods.",
+  "groupByCategory": "Agrupar por categoría",
+  "categoryOutfits": "Atuendos",
+  "categoryHairstyle": "Peinados",
+  "categoryFaceMakeup": "Rostro y maquillaje",
+  "categoryAccessories": "Accesorios",
+  "categoryGameplay": "Jugabilidad y scripts",
+  "categoryOther": "Otros"
 }

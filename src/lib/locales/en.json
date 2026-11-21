@@ -306,5 +306,12 @@
   "pakModsHint": "Legacy PAK mods are .pak files in inZOI's Content/Paks/~mods folder. Detect finds the game, or pick the game folder or ~mods. Leave empty to turn this off.",
   "legacyPak": "Legacy PAK",
   "legacyNote": "This legacy PAK mod stays in the game's ~mods folder. Disabling renames its files with a _disabled suffix; removing moves them to a .inzoimm-trash folder next to Paks. Close inZOI before changing it.",
-  "pakNotFound": "Could not find an inZOI install. Pick the game folder or ~mods instead."
+  "pakNotFound": "Could not find an inZOI install. Pick the game folder or ~mods instead.",
+  "groupByCategory": "Group by category",
+  "categoryOutfits": "Outfits",
+  "categoryHairstyle": "Hairstyles",
+  "categoryFaceMakeup": "Face & makeup",
+  "categoryAccessories": "Accessories",
+  "categoryGameplay": "Gameplay & scripts",
+  "categoryOther": "Other"
 }

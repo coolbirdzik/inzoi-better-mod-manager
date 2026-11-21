@@ -306,5 +306,12 @@
   "pakModsHint": "Legacy-PAK-Mods sind .pak-Dateien im Ordner Content/Paks/~mods von inZOI. „Suchen“ findet das Spiel, oder wähle den Spielordner bzw. ~mods. Leer lassen zum Deaktivieren.",
   "legacyPak": "Legacy-PAK",
   "legacyNote": "Dieser Legacy-PAK-Mod bleibt im ~mods-Ordner des Spiels. Beim Deaktivieren erhalten die Dateien die Endung _disabled; Entfernen verschiebt sie in den Ordner .inzoimm-trash neben Paks. Schließe inZOI vor Änderungen.",
-  "pakNotFound": "Keine inZOI-Installation gefunden. Wähle stattdessen den Spielordner oder ~mods."
+  "pakNotFound": "Keine inZOI-Installation gefunden. Wähle stattdessen den Spielordner oder ~mods.",
+  "groupByCategory": "Nach Kategorie gruppieren",
+  "categoryOutfits": "Outfits",
+  "categoryHairstyle": "Frisuren",
+  "categoryFaceMakeup": "Gesicht & Make-up",
+  "categoryAccessories": "Accessoires",
+  "categoryGameplay": "Gameplay & Skripte",
+  "categoryOther": "Sonstiges"
 }

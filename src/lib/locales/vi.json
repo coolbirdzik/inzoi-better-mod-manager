@@ -306,5 +306,12 @@
   "pakModsHint": "Mod PAK cũ là các file .pak trong thư mục Content/Paks/~mods của inZOI. Tự tìm sẽ dò game, hoặc chọn thư mục game hay ~mods. Để trống để tắt.",
   "legacyPak": "PAK cũ",
   "legacyNote": "Mod PAK cũ này nằm lại trong thư mục ~mods của game. Tắt mod sẽ đổi tên file thêm đuôi _disabled; xóa sẽ chuyển vào thư mục .inzoimm-trash cạnh Paks. Hãy đóng inZOI trước khi thay đổi.",
-  "pakNotFound": "Không tìm thấy bản cài inZOI. Hãy chọn thư mục game hoặc ~mods."
+  "pakNotFound": "Không tìm thấy bản cài inZOI. Hãy chọn thư mục game hoặc ~mods.",
+  "groupByCategory": "Nhóm theo danh mục",
+  "categoryOutfits": "Trang phục",
+  "categoryHairstyle": "Kiểu tóc",
+  "categoryFaceMakeup": "Khuôn mặt & trang điểm",
+  "categoryAccessories": "Phụ kiện",
+  "categoryGameplay": "Gameplay & script",
+  "categoryOther": "Khác"
 }

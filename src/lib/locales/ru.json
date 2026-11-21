@@ -306,5 +306,12 @@
   "pakModsHint": "Устаревшие PAK-моды — это файлы .pak в папке Content/Paks/~mods игры inZOI. «Найти» определит игру, либо выберите папку игры или ~mods. Оставьте пустым, чтобы отключить.",
   "legacyPak": "Устаревший PAK",
   "legacyNote": "Этот устаревший PAK-мод остаётся в папке ~mods игры. При отключении к файлам добавляется суффикс _disabled; при удалении они переносятся в папку .inzoimm-trash рядом с Paks. Закройте inZOI перед изменениями.",
-  "pakNotFound": "Установка inZOI не найдена. Выберите папку игры или ~mods."
+  "pakNotFound": "Установка inZOI не найдена. Выберите папку игры или ~mods.",
+  "groupByCategory": "Группировать по категориям",
+  "categoryOutfits": "Одежда",
+  "categoryHairstyle": "Причёски",
+  "categoryFaceMakeup": "Лицо и макияж",
+  "categoryAccessories": "Аксессуары",
+  "categoryGameplay": "Геймплей и скрипты",
+  "categoryOther": "Другое"
 }

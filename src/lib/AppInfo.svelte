@@ -17,23 +17,19 @@
 </script>
 
 <section class="app-info" aria-label={t('aboutApp')}>
- <p class="app-version">{t('version')} <span>{version}</span></p>
- <a class="author" href="https://github.com/coolbirdzik" target="_blank" rel="noopener noreferrer" onclick={event=>void external(event,'https://github.com/coolbirdzik')}><IconBrandGithub size={15}/>{t('byAuthor',{author:'coolbirdzik'})}</a>
- <a class="donate" href="https://paypal.me/coolbirdv" target="_blank" rel="noopener noreferrer" onclick={event=>void external(event,'https://paypal.me/coolbirdv')}><IconBrandPaypal size={16}/>{t('donatePayPal')}</a>
+ <span class="app-version" title={t('version')}>v{version}</span>
+ <a class="author" href="https://github.com/coolbirdzik" target="_blank" rel="noopener noreferrer" aria-label={t('byAuthor',{author:'coolbirdzik'})} title={t('byAuthor',{author:'coolbirdzik'})} onclick={event=>void external(event,'https://github.com/coolbirdzik')}><IconBrandGithub size={15}/></a>
+ <a class="donate" href="https://paypal.me/coolbirdv" target="_blank" rel="noopener noreferrer" aria-label={t('donatePayPal')} title={t('donatePayPal')} onclick={event=>void external(event,'https://paypal.me/coolbirdv')}><IconBrandPaypal size={15}/></a>
  {#if error}<p class="form-error" role="alert">{t('operationFailed')}: {error}</p>{/if}
 </section>
 
 <style>
- .app-info{padding:0 12px 8px;min-width:0}
- .app-version{font-size:10px;color:var(--muted);margin:0 0 6px;line-height:1.5}
- .app-version span{font-variant-numeric:tabular-nums;color:#c5beca;margin-left:4px}
- a{display:flex;align-items:center;gap:7px;font-size:10px;line-height:1.5;color:#aaa7b0;text-decoration:none;border-radius:6px;transition:background .15s,color .15s;overflow-wrap:anywhere}
+ .app-info{display:flex;flex-wrap:wrap;align-items:center;gap:2px;min-width:0;flex-shrink:0}
+ .app-version{font-size:10px;color:#77717c;font-variant-numeric:tabular-nums;margin-right:4px}
+ a{display:flex;align-items:center;justify-content:center;width:24px;height:24px;color:#8b868f;text-decoration:none;border-radius:5px;transition:background .15s,color .15s}
  a :global(svg){flex-shrink:0}
- a:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
- .author{padding:4px 0;margin-bottom:9px}
- .author:hover{color:#fff}
- .donate{justify-content:center;padding:7px 6px;background:#eb795e16;border:1px solid #eb795e38;color:#efab98}
- .donate:hover{background:#eb795e28;color:#ffd0c3}
- .donate:active{background:#eb795e38}
- .form-error{font-size:11px;line-height:1.6;overflow-wrap:anywhere;margin:12px 0 0}
+ a:hover{background:#ffffff0a;color:#fff}
+ a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+ .donate:hover{color:#efab98}
+ .form-error{flex-basis:100%;font-size:11px;line-height:1.6;overflow-wrap:anywhere;margin:8px 0 0}
 </style>

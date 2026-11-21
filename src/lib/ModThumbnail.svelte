@@ -11,6 +11,6 @@
 {:else}
  <div class="thumbnail-placeholder" title={t('noThumbnail')}>
   <IconBox size={large ? 44 : 25} stroke={1.1}/>
-  {#if large}<span>{t('noThumbnail')}</span>{/if}
+  {#if large}<span class="sr-only">{t('noThumbnail')}</span>{/if}
  </div>
 {/if}

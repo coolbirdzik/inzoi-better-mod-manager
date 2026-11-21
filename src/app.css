@@ -137,3 +137,55 @@ main>header{height:56px}
 .mod-reader-error{flex-shrink:0;margin:12px 24px 0;padding:10px 14px;background:#302320;border:1px solid #553832;border-radius:5px;color:#e4b3a7;font-size:12px;overflow-wrap:anywhere}
 
 .app-update-notice{background:#29251f;border-color:#514331;color:#d3bd96;gap:10px}.app-update-notice>span{min-width:0;flex:1}.app-update-notice strong{font-size:12px;font-weight:500}.app-update-notice small{display:block;font-size:11px;line-height:1.6;margin-top:4px}.app-update-notice .app-update-detail{color:var(--muted);max-height:55px;overflow:auto;overflow-wrap:anywhere}.app-update-notice>button{flex-shrink:0}
+
+/* Quiet library: fewer words on screen, mods grouped by category. */
+.sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0 0 0 0)!important;white-space:nowrap!important;border:0!important}
+.brand{padding-bottom:26px}
+.aside-row{display:flex;align-items:center;gap:2px;flex-shrink:0}
+.aside-row-main{flex:1;min-width:0;justify-content:flex-start;color:#aaa7b0;font-size:12px;min-height:38px;gap:10px;white-space:nowrap}
+.aside-row-main>svg,.aside-row-main>small{flex-shrink:0}
+.aside-row-label{min-width:0;overflow:hidden;text-overflow:ellipsis}
+@media(max-width:1000px){.aside-row-main{padding-right:6px;gap:8px}}
+.aside-row .check-log-link{flex-shrink:0;width:32px;height:32px;padding:0;color:var(--muted)}
+.aside-row .check-log-link:hover{color:#e9e8eb}
+.aside-meta{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:8px;padding:8px 2px 0 6px;border-top:1px solid var(--line)}
+.aside-meta .app-update-button{flex:0 1 auto;min-width:0;justify-content:flex-start;gap:6px;padding:4px 6px;color:#77717c;font-size:10px}
+.aside-meta .app-update-button:hover{color:#c5beca}
+.aside-meta .app-update-button>svg{flex-shrink:0}
+.aside-meta .update-status{padding:0;font-size:10px;line-height:1.4;color:inherit;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+footer{height:30px;font-size:10px}
+.game-dot.busy{background:var(--accent)}
+.page-title.managed-title .actions>button.icon{width:32px;padding:0;color:#aaa5af;border:1px solid var(--line);background:#ffffff03}
+.page-title.managed-title .actions>button.icon:hover{color:#e9e8eb;background:#ffffff0a}
+.view-switch-divider{width:1px;align-self:stretch;margin:4px 2px;background:var(--line)}
+
+/* Category sections share the grid so cards stay aligned and keyboard order matches. */
+.mod-group-head{grid-column:1/-1;display:flex;align-items:center;gap:8px;margin:18px 2px 2px;font-size:12px;font-weight:600;color:#ddd4e0;letter-spacing:.1px}
+.mod-group-head:first-child{margin-top:2px}
+.mod-group-head small{font-size:10px;font-weight:400;color:var(--muted);font-variant-numeric:tabular-nums}
+.mod-group-head::after{content:'';flex:1;height:1px;background:var(--line)}
+.mod-items:not(.mod-grid) .mod-group-head{margin:18px 10px 8px}
+.mod-items:not(.mod-grid) .mod-group-head:first-child{margin-top:4px}
+
+/* Grid cards: picture, name, author. Source and switch sit on the picture. */
+.mod-grid .mod-title{padding:11px 12px 13px;gap:4px}
+.mod-grid .mod-title>span{font-size:10px}
+.mod-grid .mod-card .mod-title .mod-origin{position:absolute;top:8px;left:8px;padding:3px 6px;font-size:9px;background:#141416d9;backdrop-filter:blur(6px);max-width:calc(100% - 70px);overflow:hidden;text-overflow:ellipsis}
+.mod-grid .mod-toggle{top:8px;bottom:auto;right:8px;transform:none;background:#141416cc;border-color:#ffffff38;backdrop-filter:blur(6px)}
+.mod-grid .mod-toggle[aria-checked=true]{background:#789781;border-color:#93b39e}
+.mod-grid .mod-card .status:not(.sr-only){align-self:flex-start;margin:0 12px 12px;padding:3px 6px;border-radius:4px;background:#ffffff08;color:#a49aa9}
+.mod-grid .mod-card .status:not(.sr-only)::before{display:none}
+.mod-card .mod-row{padding-right:56px}
+.mod-grid .mod-card .mod-row{padding:0}
+.mod-title .mod-update-badge{align-self:flex-start;padding:2px 6px;border-radius:4px;background:#a9ccb214}
+.thumbnail-placeholder{color:#4d4851}
+
+/* Tag filter sits with the other library filters and only appears once tags exist. */
+.library-scopes.has-tags{max-width:800px;grid-template-columns:minmax(0,1.1fr) minmax(0,.75fr) minmax(0,1.4fr) minmax(0,1fr)}
+.tag-scope{display:flex;align-items:center;gap:6px;height:30px;min-width:0;padding:0 8px;background:#ffffff04;border:1px solid #ffffff0a;border-radius:5px;color:var(--muted)}
+.tag-scope>svg{display:block;flex-shrink:0}
+.tag-scope select{flex:1;width:100%;min-width:0;max-width:100%;height:28px;margin:0;padding:0;border:0;border-radius:3px;background:transparent;color:#bdb4c3;font-size:11px;text-overflow:ellipsis}
+.tag-scope:hover{background:#ffffff08;border-color:#ffffff20}
+.tag-scope.active{border-color:#eb795e55;background:#eb795e0d;color:var(--accent)}
+.tag-scope.active select{color:#efab98}
+.library-scopes select option{background:#202023;color:#e6d9eb}

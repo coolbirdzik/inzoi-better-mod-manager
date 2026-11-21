@@ -306,5 +306,12 @@
   "pakModsHint": "Les mods PAK hérités sont des fichiers .pak dans le dossier Content/Paks/~mods d'inZOI. Détecter trouve le jeu, ou choisissez le dossier du jeu ou ~mods. Laissez vide pour désactiver.",
   "legacyPak": "PAK hérité",
   "legacyNote": "Ce mod PAK hérité reste dans le dossier ~mods du jeu. La désactivation ajoute le suffixe _disabled à ses fichiers ; la suppression les place dans le dossier .inzoimm-trash à côté de Paks. Fermez inZOI avant toute modification.",
-  "pakNotFound": "Aucune installation d'inZOI trouvée. Choisissez le dossier du jeu ou ~mods."
+  "pakNotFound": "Aucune installation d'inZOI trouvée. Choisissez le dossier du jeu ou ~mods.",
+  "groupByCategory": "Grouper par catégorie",
+  "categoryOutfits": "Tenues",
+  "categoryHairstyle": "Coiffures",
+  "categoryFaceMakeup": "Visage et maquillage",
+  "categoryAccessories": "Accessoires",
+  "categoryGameplay": "Gameplay et scripts",
+  "categoryOther": "Autres"
 }

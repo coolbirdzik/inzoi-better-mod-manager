@@ -306,5 +306,12 @@
   "pakModsHint": "旧版 PAK 模组是 inZOI 的 Content/Paks/~mods 文件夹中的 .pak 文件。可点击检测查找游戏，或选择游戏文件夹或 ~mods。留空则关闭此功能。",
   "legacyPak": "旧版 PAK",
   "legacyNote": "此旧版 PAK 模组保留在游戏的 ~mods 文件夹中。停用会给文件名加上 _disabled 后缀；移除会将其移入 Paks 旁的 .inzoimm-trash 文件夹。修改前请关闭 inZOI。",
-  "pakNotFound": "未找到 inZOI 安装。请选择游戏文件夹或 ~mods。"
+  "pakNotFound": "未找到 inZOI 安装。请选择游戏文件夹或 ~mods。",
+  "groupByCategory": "按类别分组",
+  "categoryOutfits": "服装",
+  "categoryHairstyle": "发型",
+  "categoryFaceMakeup": "面部与妆容",
+  "categoryAccessories": "配饰",
+  "categoryGameplay": "玩法与脚本",
+  "categoryOther": "其他"
 }

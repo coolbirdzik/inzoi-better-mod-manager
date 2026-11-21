@@ -129,6 +129,7 @@ test('inspector exposes nested metadata and links, and tags persist and filter t
  await expect(inspector.getByRole('button',{name:'Remove tag Summer favorites',exact:true})).toBeVisible();
  await page.reload();await page.getByRole('combobox',{name:'Filter by tag'}).selectOption('Summer favorites');
  await expect(page.locator('.mod-row')).toHaveCount(1);await expect(page.locator('.mod-row')).toContainText('Linen Dress');
+ await page.locator('.library-toolbar').screenshot({path:'test-results/tag-filter-toolbar.png'});
  await inspector.locator('.inspector-tags > summary').click();
  await page.getByRole('button',{name:'Remove tag Summer favorites',exact:true}).click();
  await expect(page.getByRole('combobox',{name:'Filter by tag'})).toHaveValue('');
