@@ -155,6 +155,23 @@ struct Snapshot {
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
+// Windows refuses to move a deployed folder (os error 5 or 32) while the game
+// has its .pak/.utoc/.ucas files open. The UI translates `gameFilesLocked:`.
+const GAME_FILES_LOCKED: &str = "gameFilesLocked:";
+fn move_deployed_error(error: std::io::Error, m: &Mod, path: &Path) -> String {
+    if matches!(error.raw_os_error(), Some(5 | 32))
+        || error.kind() == std::io::ErrorKind::PermissionDenied
+    {
+        let name = if m.name.trim().is_empty() {
+            &m.project
+        } else {
+            &m.name
+        };
+        format!("{GAME_FILES_LOCKED}{name}")
+    } else {
+        format!("{}: {error}", path.display())
+    }
+}
 fn write_store(state: &State, s: &Store) -> Result<()> {
     let temp = state.file.with_extension("tmp");
     fs::write(&temp, serde_json::to_vec_pretty(s).map_err(err)?).map_err(err)?;
@@ -837,7 +854,7 @@ fn set_managed_enabled(id: String, enabled: bool, state: &State) -> Result<()> {
             .join(".inzoimm-disabled");
         fs::create_dir_all(&trash).map_err(err)?;
         let backup = trash.join(uuid::Uuid::new_v4().to_string());
-        fs::rename(&target, &backup).map_err(err)?;
+        fs::rename(&target, &backup).map_err(|e| move_deployed_error(e, &m, &target))?;
         s.mods[pos].enabled = false;
         if let Err(e) = write_store(&state, &s) {
             let _ = fs::rename(backup, target);
@@ -995,7 +1012,7 @@ fn remove_mod_core(id: String, state: &State) -> Result<()> {
             .join(".inzoimm-disabled");
         fs::create_dir_all(&recovery).map_err(err)?;
         let backup = recovery.join(uuid::Uuid::new_v4().to_string());
-        fs::rename(&deployed, &backup).map_err(err)?;
+        fs::rename(&deployed, &backup).map_err(|e| move_deployed_error(e, &m, &deployed))?;
         deployed_backup = Some((deployed, backup));
     }
     let dest = trash.join(uuid::Uuid::new_v4().to_string());
@@ -1399,6 +1416,7 @@ pub fn run() {
             credentials::load_curseforge_api_key,
             credentials::save_curseforge_api_key,
             portable::is_portable,
+            portable::check_portable_update,
             portable::update_portable
         ])
         .run(context)
@@ -1752,6 +1770,27 @@ mod lifecycle_tests {
             fs::read_dir(root.join("library/.trash")).unwrap().count(),
             1
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn disable_while_game_holds_files_explains_and_keeps_mod_enabled() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let (root, state, source) = fixture();
+        adopt_mod_core(source.to_string_lossy().into_owned(), &state).unwrap();
+        let id = state.store.lock().unwrap().mods[0].id.clone();
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(source.join("payload.pak"))
+            .unwrap();
+        let error = toggle_mod_core(id.clone(), &state).unwrap_err();
+        assert_eq!(error, format!("{GAME_FILES_LOCKED}Hair"));
+        assert!(state.store.lock().unwrap().mods[0].enabled);
+        assert!(source.join("payload.pak").exists());
+        drop(lock);
+        toggle_mod_core(id, &state).unwrap();
+        assert!(!source.exists());
         fs::remove_dir_all(root).unwrap();
     }
     #[test]

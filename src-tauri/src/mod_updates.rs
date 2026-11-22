@@ -461,7 +461,7 @@ fn plan(token: &str, state: &State) -> Result<Plan> {
     }
     Ok(plan)
 }
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn prepare_mod_update(token: String, state: tauri::State<State>) -> Result<NexusLink> {
     let plan = plan(&token, &state)?;
     let current = current_mod(&plan.id, &state, None)?;
@@ -551,7 +551,7 @@ fn switch_version(old_id: &str, new_id: &str, state: &State, restoring: bool) ->
         let backup = recovery.join(uuid::Uuid::new_v4().to_string());
         if let Err(error) = fs::rename(&target, &backup) {
             let _ = fs::remove_dir_all(staged);
-            return Err(err(error));
+            return Err(move_deployed_error(error, &old, &target));
         }
         if let Err(error) = fs::rename(&staged, &target) {
             let rollback = fs::rename(&backup, &target);
@@ -584,7 +584,7 @@ fn switch_version(old_id: &str, new_id: &str, state: &State, restoring: bool) ->
                 .join(".inzoimm-disabled");
             fs::create_dir_all(&recovery).map_err(err)?;
             let backup = recovery.join(uuid::Uuid::new_v4().to_string());
-            fs::rename(&target, &backup).map_err(err)?;
+            fs::rename(&target, &backup).map_err(|e| move_deployed_error(e, &old, &target))?;
             deployment = Some((target, backup, None));
         }
     }

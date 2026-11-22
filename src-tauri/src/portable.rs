@@ -104,10 +104,8 @@ fn extract_executable(bytes: &[u8], destination: &Path) -> Result<()> {
     }
     fs::write(destination, data).map_err(err)
 }
-#[tauri::command]
-pub(crate) async fn update_portable(app: tauri::AppHandle) -> Result<bool> {
+async fn find_update(app: &tauri::AppHandle) -> Result<Option<tauri_plugin_updater::Update>> {
     use tauri_plugin_updater::UpdaterExt;
-    let root = root().ok_or("This app is not running in portable mode")?;
     let checked = app
         .updater_builder()
         .target("windows-x86_64-portable")
@@ -116,13 +114,26 @@ pub(crate) async fn update_portable(app: tauri::AppHandle) -> Result<bool> {
         .map_err(err)?
         .check()
         .await;
-    let update = match checked {
-        Ok(update) => update,
-        Err(primary) => app_updates::check_fallback(&app, Some("windows-x86_64-portable"))
+    match checked {
+        Ok(update) => Ok(update),
+        Err(primary) => app_updates::check_fallback(app, Some("windows-x86_64-portable"))
             .await
-            .map_err(|fallback| format!("{primary}; GitHub API: {fallback}"))?,
-    };
-    let Some(update) = update else {
+            .map_err(|fallback| format!("{primary}; GitHub API: {fallback}")),
+    }
+}
+/// Only looks for a newer portable release; nothing is downloaded or restarted.
+#[tauri::command]
+pub(crate) async fn check_portable_update(app: tauri::AppHandle) -> Result<Option<String>> {
+    if root().is_none() {
+        return Err("This app is not running in portable mode".into());
+    }
+    Ok(find_update(&app).await?.map(|update| update.version))
+}
+/// Runs only after the user chooses to install: downloads, replaces and restarts.
+#[tauri::command]
+pub(crate) async fn update_portable(app: tauri::AppHandle) -> Result<bool> {
+    let root = root().ok_or("This app is not running in portable mode")?;
+    let Some(update) = find_update(&app).await? else {
         return Ok(false);
     };
     let bytes = update.download(|_, _| {}, || {}).await.map_err(err)?;

@@ -1,6 +1,6 @@
 <script lang="ts">
  import {IconDownload,IconFolder,IconX,IconPlayerPause,IconPlayerPlay,IconRefresh,IconTrash,IconArrowUpRight} from '@tabler/icons-svelte';
- import {t,type TranslationKey} from './i18n.svelte';
+ import {t,errorText,type TranslationKey} from './i18n.svelte';
  import {pendingDownload,downloadLabel,downloadProvider,type DownloadJob} from './downloads';
  let {jobs,paused,path,onclose,onpause,oncancel,onretry,onclear,onopen,onlink,onfolder,onsettings}:{jobs:DownloadJob[];paused:boolean;path:string;onclose:()=>void;onpause:()=>void;oncancel:(job:DownloadJob)=>void;onretry:(job:DownloadJob)=>void;onclear:()=>void;onopen:(path:string)=>void;onlink:(url:string)=>void;onfolder:()=>void;onsettings:()=>void}=$props();
  let link=$state('');
@@ -18,7 +18,7 @@
    <div class="download-job-title"><IconDownload size={18}/><span class="download-provider">{downloadProvider(job.info)}</span><strong>{job.update?`${t('updateMod')}: ${job.update.name}`:job.result?job.result.path.split(/[\\/]/).at(-1):downloadLabel(job.info)}</strong><button class="icon" aria-label={t(job.info.provider==='curseforge'?'openOnCurseforge':'openOnNexus')} title={t(job.info.provider==='curseforge'?'openOnCurseforge':'openOnNexus')} onclick={()=>onopen(job.info.url)}><IconArrowUpRight size={15}/></button></div>
    <div class="download-job-status"><span>{t(job.update&&job.status==='completed'?'modUpdateApplied':statusKey[job.status])}</span>{#if job.received>0}<span>{mb(job.received)} MB{#if job.total} / {mb(job.total)} MB{/if}</span>{/if}</div>
    {#if job.status==='downloading'}<progress max={job.total??undefined} value={job.total?job.received:undefined} aria-label={t('downloadProgress')}></progress>{/if}
-   {#if job.error}<p class="form-error">{job.error==='nexusApiKeyRequired'||job.error==='curseforgeApiKeyRequired'?t(job.error):job.error}</p>{/if}
+   {#if job.error}<p class="form-error">{errorText(job.error,['nexusApiKeyRequired','curseforgeApiKeyRequired'])}</p>{/if}
    {#if job.status==='needsExtraction'}<p class="muted">{t('archiveExtractionHint')}</p>{/if}
    {#if job.result}<p class="download-job-path" title={job.result.path}>{job.result.path}</p>{/if}
    <div class="download-job-actions">

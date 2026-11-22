@@ -1,5 +1,5 @@
 <script lang="ts">
- import { language, languages, setLanguage, t, type TranslationKey } from './lib/i18n.svelte';
+ import { language, languages, setLanguage, t, errorText, type TranslationKey } from './lib/i18n.svelte';
  import { onMount } from 'svelte';
  import { invoke, isTauri, Channel } from '@tauri-apps/api/core';
  import { listen } from '@tauri-apps/api/event';
@@ -152,7 +152,7 @@
   const info=await invoke<NexusInfo>('prepare_mod_update',{token:checked.token});jobs.push({info,status:'queued',received:0,total:null,update:{id:m.id,token:checked.token,name:m.name}});
  })}
  async function restoreMod(m:Mod){await run(async()=>{if(await confirm(t('restoreModConfirm',{name:m.name}),{title:t('restorePreviousMod'),okLabel:t('confirm'),cancelLabel:t('cancel')})){try{selected=await invoke<string>('restore_previous_mod',{id:m.id});modChecks={...modChecks,[m.id]:undefined}}finally{await refresh()}}})}
- function updateError(value:string){return ['nexusApiKeyRequired','curseforgeApiKeyRequired'].includes(value)?t(value as TranslationKey):value}
+ function updateError(value:string){return errorText(value,['nexusApiKeyRequired','curseforgeApiKeyRequired'])}
  let updateStatus=$state<TranslationKey>('checkingUpdates'), appUpdateError=$state('');
  let input:HTMLInputElement;
  type ViewMode = 'grid' | 'list';
@@ -274,7 +274,7 @@
  const groups=$derived(groupByCategory?groupMods(filtered,categoryOf,categoryLabel,language.code):[{category:{id:''} as ModCategory,mods:filtered}]);
  const ordered=$derived(groups.flatMap(group=>group.mods));
  const showGroups=$derived(groups.length>1);
- const errorMessage=$derived(['desktopRequired','nexusApiKeyRequired','nexusKeyLoadFailed','nexusKeySaveFailed','curseforgeKeyLoadFailed','curseforgeKeySaveFailed','curseforgeApiKeyRequired'].includes(error)?t(error as TranslationKey):error);
+ const errorMessage=$derived(errorText(error,['desktopRequired','nexusApiKeyRequired','nexusKeyLoadFailed','nexusKeySaveFailed','curseforgeKeyLoadFailed','curseforgeKeySaveFailed','curseforgeApiKeyRequired']));
  const active=$derived(ordered.find(m=>m.id===selected)??ordered[0]);
  async function run(action:()=>Promise<void>){if(busy||updating)return false;busy=true;error='';message='';try{await action();return true}catch(e){error=String(e);return false}finally{busy=false}}
  async function refresh(){data=await invoke<Snapshot>('snapshot')}
@@ -288,22 +288,25 @@
   try{return await check({timeout:20000})}
   catch(primary){try{const metadata=await invoke<ConstructorParameters<typeof Update>[0]|null>('check_app_update_fallback');return metadata?new Update(metadata):null}catch(fallback){throw new Error(`${String(primary)}; GitHub API: ${String(fallback)}`)}}
  }
- let checkingApp=$state(false);
+ let checkingApp=$state(false), availableVersion=$state(''), updatePrompt=$state(false), installFailed=$state(false);
  const appIdle=()=>!(checkingMods||updating||busy||nexusKeySaving||curseforgeKeySaving||processing||pendingCount||settingsOpen||editOpen||linkOpen||importOpen||downloadsOpen||checkLogsOpen||metadataOpen||discoveryOpen);
+ // Only checks. Installing closes and restarts the app, so that always waits for the user's choice.
  async function updates(){
-  if(checkingApp||!appIdle())return;
-  checkingApp=true;appUpdateError='';updateStatus='checkingUpdates';
+  if(checkingApp||availableVersion||!appIdle())return;
+  checkingApp=true;appUpdateError='';installFailed=false;updateStatus='checkingUpdates';
   try{
-   if(await invoke<boolean>('is_portable')){updating=true;updateStatus='applyingUpdate';const applied=await invoke<boolean>('update_portable');if(!applied)updateStatus='upToDate';}
-   else{
-    // The check is only a network request: keep the rest of the app usable meanwhile.
-    update=await checkAppUpdate();
-    if(update){
-     while(!appIdle())await new Promise(r=>setTimeout(r,500));
-     updating=true;updateStatus='applyingUpdate';await update.downloadAndInstall(undefined,{timeout:600000,restartAfterInstall:true});await relaunch();
-    }else updateStatus='upToDate';
-   }
-  }catch(e){updateStatus=updateStatus==='applyingUpdate'?'appUpdateFailed':'updateUnavailable';appUpdateError=String(e).replace(/^Error: /,'')}finally{updating=false;checkingApp=false}
+   const version=await invoke<boolean>('is_portable')?await invoke<string|null>('check_portable_update'):(update=await checkAppUpdate())?.version;
+   if(version){availableVersion=version;updateStatus='newVersion';updatePrompt=true}else updateStatus='upToDate';
+  }catch(e){updateStatus='updateUnavailable';appUpdateError=String(e).replace(/^Error: /,'')}finally{checkingApp=false}
+ }
+ function appUpdateClick(){if(availableVersion){appUpdateError='';updatePrompt=true}else void updates()}
+ async function installAppUpdate(){
+  if(updating||!availableVersion)return;
+  updating=true;updatePrompt=false;appUpdateError='';installFailed=false;updateStatus='applyingUpdate';
+  try{
+   if(await invoke<boolean>('is_portable')){if(!await invoke<boolean>('update_portable')){availableVersion='';updateStatus='upToDate'}}
+   else if(update){await update.downloadAndInstall(undefined,{timeout:600000,restartAfterInstall:true});await relaunch()}
+  }catch(e){updateStatus='appUpdateFailed';installFailed=true;appUpdateError=String(e).replace(/^Error: /,'')}finally{updating=false}
  }
  function openNexusKeys(){void run(async()=>{await openUrl('https://www.nexusmods.com/settings/api-keys')})}
  async function receiveLink(raw:string){try{const info=await invoke<NexusInfo>('parse_nxm',{link:raw});downloadsOpen=false;showLink(info)}catch(e){error=String(e)}}
@@ -341,13 +344,14 @@
   </div>
   </div>
   <div class="aside-bottom"><button class="downloads-button" bind:this={downloadsButton} class:chosen={downloadsOpen} disabled={updating} onclick={openDownloads}><IconDownload size={18}/>{t('downloads')}{#if pendingCount}<small class="download-count">{pendingCount}</small>{:else if jobs.some(job=>job.status==='failed'||job.status==='importFailed')}<small class="download-count" aria-label={t('downloadFailed')}>!</small>{/if}</button><button disabled={updating} title="Ctrl ," onclick={openSettings}><IconSettings size={18}/>{t('settings')}{#if missingKeys&&nexusKeyReady&&curseforgeKeyReady}<small class="download-count key-badge" role="status" aria-label={t('keysMissingBadge',{count:missingKeys})} title={t('keysMissingBadge',{count:missingKeys})}>{missingKeys}</small>{/if}</button>
-   <div class="aside-meta"><button class="app-update-button" aria-label={t('appUpdates')} title={`${t('appUpdates')}: ${t(updateStatus,{version:update?.version??''})}`} onclick={()=>void updates()} disabled={busy||updating||checkingApp||processing||pendingCount>0}><IconRefresh size={13} class={checkingApp?'spin':''}/><span class="update-status" class:sr-only={updateStatus==='upToDate'||updateStatus==='checkingUpdates'}>{t(updateStatus,{version:update?.version??''})}</span></button><AppInfo/></div></div>
+   <div class="aside-meta"><button class="app-update-button" aria-label={t('appUpdates')} title={`${t('appUpdates')}: ${t(updateStatus,{version:availableVersion})}`} onclick={appUpdateClick} disabled={busy||updating||checkingApp||processing||pendingCount>0}><IconRefresh size={13} class={checkingApp?'spin':''}/><span class="update-status" class:sr-only={updateStatus==='upToDate'||updateStatus==='checkingUpdates'}>{t(updateStatus,{version:availableVersion})}</span></button><AppInfo/></div></div>
  </aside>
  <main>
   <header><div class="navigation-buttons" role="group" aria-label={t('navigation')}><button class="icon" title={t('back')} aria-label={t('back')} disabled={!canBack||updating} onclick={()=>historyMove(-1)}><IconArrowLeft size={18}/></button><button class="icon" title={t('forward')} aria-label={t('forward')} disabled={!canForward||updating} onclick={()=>historyMove(1)}><IconArrowRight size={18}/></button></div><div class="search"><IconSearch size={20}/><input bind:this={input} title="Ctrl K" value={sourcesView?sourceQuery:query} oninput={e=>{if(sourcesView)sourceQuery=e.currentTarget.value;else query=e.currentTarget.value}} placeholder={t(sourcesView?'searchSources':'searchPlaceholder')} aria-label={t(sourcesView?'searchSources':'search')}/>{#if sourcesView&&sourceQuery}<button class="icon" aria-label={t('clearSourceSearch')} onclick={()=>sourceQuery=''}><IconX size={15}/></button>{/if}</div><button class="icon" title={t('refresh')} disabled={busy||updating} onclick={()=>void run(refresh)}><IconRefresh size={18} class={busy?'spin':''}/></button></header>
   <div class="page-title managed-title"><div class="library-heading"><h1 title={sourcesView?t('sourceFolders'):folder?currentFolder?.name??folderName(folder):t('yourLibrary')}>{sourcesView?t('sourceFolders'):folder?currentFolder?.name??folderName(folder):t('yourLibrary')}</h1><p>{sourcesView?t('sourceCount',{count:managedRoots.length}):t('folderModCount',{count:filtered.length})}</p>{#if !sourcesView}<button class="icon library-help" aria-label={t('managedCollectionHint')}><IconInfoCircle size={16}/><span class="library-help-tooltip" aria-hidden="true">{t('managedCollectionHint')}</span></button>{/if}</div><div class="actions"><button class="icon" aria-label={t('scanComputer')} title={t('scanComputer')} disabled={busy||updating||!data} onclick={openDiscovery}><IconZoomScan size={17}/></button>{#if sourcesView}<button class="primary" disabled={busy||updating||!data} onclick={addSource}><IconPlus size={17}/>{t('addSource')}</button>{:else}<button class="icon" aria-label={t('importZip')} title={t('importZip')} disabled={busy||updating||!data} onclick={addZip}><IconFileZip size={17}/></button><button class="primary" disabled={busy||updating||!data} onclick={add}><IconPlus size={17}/>{t('addMod')}</button>{/if}</div></div>
   {#if modChecksDone&&libraryMods.some(m=>!!modCheckErrors[m.id])}<div class="notice error check-log-notice"><span>{t('checkLogFailedCount',{count:libraryMods.filter(m=>!!modCheckErrors[m.id]).length})}</span><button onclick={openCheckLog}>{t('viewCheckLog')}</button></div>{/if}
-  {#if appUpdateError}<div class="notice app-update-notice" role="status" aria-label={t('appUpdates')}><span><strong>{t(updateStatus)}</strong><small>{t('appUpdateLibraryAvailable')}</small><small class="app-update-detail">{appUpdateError}</small></span><button disabled={busy||updating||checkingApp||processing||pendingCount>0} onclick={()=>void updates()}>{t('retryAppUpdate')}</button><button class="icon" aria-label={t('close')} onclick={()=>appUpdateError=''}><IconX size={16}/></button></div>{/if}
+  {#if updatePrompt&&availableVersion&&!appUpdateError}<div class="notice app-update-notice" role="status" aria-label={t('appUpdates')}><span><strong>{t('newVersion',{version:availableVersion})}</strong><small>{t('appUpdateRestartHint')}</small></span><button disabled={busy||updating||checkingApp||processing||pendingCount>0} onclick={()=>void installAppUpdate()}>{t('installUpdate')}</button><button onclick={()=>updatePrompt=false}>{t('updateLater')}</button></div>{/if}
+  {#if appUpdateError}<div class="notice app-update-notice" role="status" aria-label={t('appUpdates')}><span><strong>{t(updateStatus)}</strong><small>{t('appUpdateLibraryAvailable')}</small><small class="app-update-detail">{appUpdateError}</small></span><button disabled={busy||updating||checkingApp||processing||pendingCount>0} onclick={()=>void (installFailed?installAppUpdate():updates())}>{t('retryAppUpdate')}</button><button class="icon" aria-label={t('close')} onclick={()=>appUpdateError=''}><IconX size={16}/></button></div>{/if}
   {#if error}<div class="notice error" role="alert">{t('operationFailed')}: {errorMessage}<button class="icon" onclick={()=>error=''} aria-label={t('closeError')}><IconX size={16}/></button></div>{/if}
   {#if message}<div class="notice" role="status">{t(message as TranslationKey,{version:update?.version??''})}</div>{/if}
   {#if updating&&update}<div class="notice" role="status">{t('applyingUpdate')}</div>{/if}
@@ -387,7 +391,7 @@
   {/each}
   {/each}
   </div>
-  {#if filtered.length===0&&(!childFolders.length||query.trim()||tagFilter)}<div class="empty"><IconBox size={42} stroke={1}/><h2>{query?t('noResults'):t('emptyTitle')}</h2><p>{query?t('noResultsHint'):t('emptyHint')}</p>{#if !query}<button onclick={add} disabled={!data||busy}>{t('chooseModFolder')} <IconArrowUpRight size={16}/></button>{/if}</div>{/if}
+  {#if !data&&!error}<div class="empty" role="status"><IconRefresh size={30} stroke={1.5} class="spin"/><h2>{t('loadingLibrary')}</h2><p>{t('loadingLibraryHint')}</p></div>{:else if filtered.length===0&&(!childFolders.length||query.trim()||tagFilter)}<div class="empty"><IconBox size={42} stroke={1}/><h2>{query?t('noResults'):t('emptyTitle')}</h2><p>{query?t('noResultsHint'):t('emptyHint')}</p>{#if !query}<button onclick={add} disabled={!data||busy}>{t('chooseModFolder')} <IconArrowUpRight size={16}/></button>{/if}</div>{/if}
   </section>
   <ResizableInspector>
    <section class="inspector" id="mod-inspector" use:contextTarget={active?{kind:'mod',id:active.id}:{kind:'library'}} aria-label={t('modDetails')}>

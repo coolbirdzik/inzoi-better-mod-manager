@@ -669,7 +669,7 @@ pub(crate) fn cancel_discovery(request_id: String, scans: tauri::State<ScanState
 }
 
 /// Local drives the user may pick for a deep scan.
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn list_scan_drives() -> Result<Vec<String>> {
     Ok(discovery_drives::roots()?
         .into_iter()

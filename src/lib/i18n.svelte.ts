@@ -23,4 +23,7 @@ function initialLocale():Locale {try{return resolveLocale(localStorage.getItem(s
 export const language=$state({code:initialLocale()});
 export function setLanguage(code:string){language.code=resolveLocale(code);try{localStorage.setItem(storageKey,language.code)}catch{/* Keep the session preference when storage is unavailable. */}if(typeof document!=='undefined')document.documentElement.lang=language.code;}
 export function t(key:TranslationKey,params:Record<string,string|number>={}){return translate(catalogs[language.code],key,params);}
+// Backend errors are either plain text, a bare translation key, or `gameFilesLocked:<mod name>`.
+const lockedPrefix='gameFilesLocked:';
+export function errorText(raw:string,keys:readonly string[]=[]){const text=raw.replace(/^Error: /,'');if(text.startsWith(lockedPrefix))return t('gameFilesLocked',{name:text.slice(lockedPrefix.length)});return keys.includes(text)?t(text as TranslationKey):text;}
 if(typeof document!=='undefined')document.documentElement.lang=language.code;
