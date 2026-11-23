@@ -287,7 +287,7 @@ pub(crate) async fn download_file(
         return Ok(nexus::DownloadResult {
             path: path.to_string_lossy().into_owned(),
             bytes,
-            can_import: extension == "zip",
+            can_import: ["zip", "7z", "rar"].contains(&extension.as_str()),
         });
     }
     let raw = api_data(
@@ -335,7 +335,7 @@ pub(crate) async fn download_file(
         pending,
         record,
         app,
-        extension == "zip",
+        ["zip", "7z", "rar"].contains(&extension.as_str()),
     )
     .await
 }

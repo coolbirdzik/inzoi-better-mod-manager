@@ -70,3 +70,5 @@ export function modOrigin(mod:Mod):{kind:'nexus'|'curseforge'|'web'|'local';labe
  if(fields.some(f=>/^meta\.ini\..*(?:modid|nexusmodid)$/i.test(f.key)&&/^\d+$/.test(f.value)))return{kind:'nexus',label:'Nexus Mods'};
  return links[0]??{kind:'local',label:''};
 }
+/** Nexus page of the inZOI Mod Enabler (mod 1), required for legacy PAK mods in ~mods. */
+export const modEnablerUrl='https://www.nexusmods.com/inzoi/mods/1';

@@ -149,5 +149,5 @@ for(const [failure,explanation] of [['curseforgeApiKeyRequired','Missing API key
  await desktop(page,true,{failCheck:failure,logError:'Could not read log file'});await page.getByRole('button',{name:/^Check mod updates(?: \d+)?$/}).click();
  await expect(page.locator('.check-log-notice')).toContainText('2 mod update checks failed.');await page.locator('.check-log-notice').getByRole('button',{name:'View log',exact:true}).click();
  const panel=page.getByRole('dialog',{name:'Mod update log',exact:true});await expect(panel.getByRole('listitem')).toHaveCount(2);await expect(panel.getByRole('alert')).toContainText('Could not read log file');await expect(panel.locator('.check-log-causes')).toContainText(explanation);
- await panel.getByRole('button',{name:'Settings',exact:true}).click();await expect(panel).toHaveCount(0);await expect(page.getByRole('dialog',{name:'Settings',exact:true})).toBeVisible();
+ await panel.getByRole('button',{name:'Settings',exact:true}).click();await expect(panel).toHaveCount(0);await expect(page.getByRole('region',{name:'Settings',exact:true})).toBeVisible();
 });

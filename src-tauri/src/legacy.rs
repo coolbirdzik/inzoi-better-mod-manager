@@ -8,7 +8,7 @@ use super::*;
 use std::collections::BTreeMap;
 
 const EXTENSIONS: [&str; 4] = ["pak", "utoc", "ucas", "sig"];
-const DISABLED: &str = "_disabled";
+pub(crate) const DISABLED: &str = "_disabled";
 pub(crate) const ID_PREFIX: &str = "legacy:";
 const STEAM_APP_ID: &str = "2456740";
 
@@ -17,7 +17,7 @@ pub(crate) fn is_id(id: &str) -> bool {
 }
 
 /// Returns `(stem, extension, disabled)` for a file belonging to a PAK set.
-fn classify(name: &str) -> Option<(String, &'static str, bool)> {
+pub(crate) fn classify(name: &str) -> Option<(String, &'static str, bool)> {
     let (stem, ext) = name.rsplit_once('.')?;
     let ext = ext.to_ascii_lowercase();
     let (ext, disabled) = match ext.strip_suffix(DISABLED) {
@@ -172,7 +172,7 @@ pub(crate) fn scan(root: &Path) -> (Vec<Mod>, Vec<String>) {
     (mods, warnings)
 }
 
-fn io_message(error: std::io::Error, path: &Path) -> String {
+pub(crate) fn io_message(error: std::io::Error, path: &Path) -> String {
     // 5 = access denied, 32 = sharing violation (the game has the pak open).
     if matches!(error.raw_os_error(), Some(5 | 32))
         || error.kind() == std::io::ErrorKind::PermissionDenied
@@ -215,7 +215,9 @@ pub(crate) fn set_enabled(root: &Path, id: &str, enabled: bool) -> Result<()> {
         if member.disabled == enabled {
             let name = member.path.file_name().unwrap().to_string_lossy();
             let target = if enabled {
-                member.path.with_file_name(&name[..name.len() - DISABLED.len()])
+                member
+                    .path
+                    .with_file_name(&name[..name.len() - DISABLED.len()])
             } else {
                 member.path.with_file_name(format!("{name}{DISABLED}"))
             };
@@ -231,35 +233,72 @@ pub(crate) fn set_enabled(root: &Path, id: &str, enabled: bool) -> Result<()> {
     rename_all(&moves)
 }
 
-/// `Content/.inzoimm-trash`: beside `Paks`, never inside it, so a removed set
-/// can be recovered by hand but can never be mounted by the game.
-fn trash_dir(root: &Path) -> Result<PathBuf> {
+/// `Content/.inzoimm-trash`, used to back up files replaced by an installation.
+pub(crate) fn trash_dir(root: &Path) -> Result<PathBuf> {
     root.ancestors()
-        .find(|p| p.file_name().is_some_and(|n| n.eq_ignore_ascii_case("Paks")))
+        .find(|p| {
+            p.file_name()
+                .is_some_and(|n| n.eq_ignore_ascii_case("Paks"))
+        })
         .and_then(Path::parent)
         .map(|content| content.join(".inzoimm-trash"))
         .ok_or_else(|| "The legacy PAK folder must be inside Content/Paks".into())
 }
 
-/// Moves the whole set to the trash beside `Paks`.
-pub(crate) fn remove(root: &Path, id: &str) -> Result<()> {
-    let group = find(root, id)?;
-    let trash = trash_dir(root)?.join(uuid::Uuid::new_v4().to_string());
-    fs::create_dir_all(&trash).map_err(err)?;
-    let mut moved: Vec<(PathBuf, PathBuf)> = vec![];
-    for member in &group.members {
-        let to = trash.join(member.path.file_name().unwrap());
-        // Same volume as the game, so a rename is atomic and can be undone.
-        if let Err(error) = fs::rename(&member.path, &to) {
-            for (from, to) in moved.iter().rev() {
-                let _ = fs::rename(to, from);
-            }
-            let _ = fs::remove_dir(&trash);
-            return Err(io_message(error, &member.path));
+pub(crate) fn remove(root: &Path, id: &str, recycle: impl Fn(&Path) -> Result<()>) -> Result<()> {
+    let root = normalize(root)?.canonicalize().map_err(err)?;
+    let mut group = find(&root, id)?;
+    // Keep a PAK visible in the catalogue until all companion files are moved.
+    group
+        .members
+        .sort_by_key(|member| member.extension == "pak");
+    for member in group.members {
+        if !member.path.canonicalize().map_err(err)?.starts_with(&root) {
+            return Err("PAK file is outside the configured ~mods folder".into());
         }
-        moved.push((member.path.clone(), to));
+        recycle(&member.path)?;
     }
     Ok(())
+}
+
+/// The game installation folder (the parent of `BlueClient`) for a `~mods`
+/// folder, if it can be derived.
+pub(crate) fn game_root(paks: &Path) -> Option<PathBuf> {
+    paks.ancestors()
+        .find(|p| {
+            p.file_name()
+                .is_some_and(|n| n.eq_ignore_ascii_case("BlueClient"))
+        })
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+}
+
+/// The game installation folder for the configured `~mods` folder, when it
+/// exists on disk (for the "Open game folder" buttons).
+pub(crate) fn game_dir(settings: &Settings) -> Option<String> {
+    if settings.paks().is_empty() {
+        return None;
+    }
+    let game = game_root(Path::new(settings.paks()))?;
+    game.join("BlueClient")
+        .is_dir()
+        .then(|| dunce::simplified(&game).to_string_lossy().into_owned())
+}
+
+/// Where the inZOI Mod Enabler places its loader. Loose PAK mods in `~mods`
+/// are not mounted by the game without it.
+pub(crate) const ENABLER_DLL: &str = "BlueClient/Binaries/Win64/dsound.dll";
+
+/// `None` when no `~mods` folder is configured or the game folder cannot be
+/// derived from it.
+pub(crate) fn enabler_installed(settings: &Settings) -> Option<bool> {
+    if settings.paks().is_empty() {
+        return None;
+    }
+    let game = game_root(Path::new(settings.paks()))?;
+    game.join("BlueClient")
+        .is_dir()
+        .then(|| game.join(ENABLER_DLL).is_file())
 }
 
 /// Accepts the game folder, `Content/Paks`, `~mods` or a folder below it and
@@ -278,7 +317,9 @@ pub(crate) fn normalize(raw: &Path) -> Result<PathBuf> {
         return match parts.get(index + 1) {
             None => Ok(raw.join("~mods")),
             Some(next) if next == "~mods" => Ok(raw.to_path_buf()),
-            Some(_) => Err("Only the Content/Paks/~mods folder can be used for legacy PAK mods".into()),
+            Some(_) => {
+                Err("Only the Content/Paks/~mods folder can be used for legacy PAK mods".into())
+            }
         };
     }
     for relative in ["BlueClient/Content/Paks", "Content/Paks"] {
@@ -477,7 +518,10 @@ mod tests {
         assert!(!found[0].enabled);
         set_enabled(&mods, &found[0].id, true).unwrap();
         assert!(mods.join("Hair.utoc").exists());
-        assert_eq!(fs::read(paks.join("pakchunk0-Windows.pak")).unwrap(), b"game");
+        assert_eq!(
+            fs::read(paks.join("pakchunk0-Windows.pak")).unwrap(),
+            b"game"
+        );
         assert!(mods.join("AnimConfig/anim.json").exists());
         drop(root);
     }
@@ -497,17 +541,23 @@ mod tests {
 
     #[test]
     fn subfolders_and_already_disabled_paks_are_listed_and_removal_leaves_the_game_folder() {
-        let (_root, paks, mods) = fixture();
+        let (root, paks, mods) = fixture();
         fs::create_dir_all(mods.join("Pack")).unwrap();
         fs::write(mods.join("Pack/Dress.pak_disabled"), b"p").unwrap();
         fs::write(mods.join("Pack/Dress.ucas"), b"c").unwrap();
         let found = scan(&mods).0;
         assert_eq!(found.len(), 1);
         assert!(!found[0].enabled);
-        remove(&mods, &found[0].id).unwrap();
+        remove(&mods, &found[0].id, |path| {
+            crate::lifecycle_tests::mock_recycle(root.path(), path)
+        })
+        .unwrap();
         assert!(scan(&mods).0.is_empty());
         assert!(!mods.join("Pack/Dress.ucas").exists());
-        assert!(paks.parent().unwrap().join(".inzoimm-trash").is_dir());
+        let trashed = crate::lifecycle_tests::mock_trash_path(root.path(), &mods.join("Pack"));
+        assert_eq!(fs::read(trashed.join("Dress.pak_disabled")).unwrap(), b"p");
+        assert_eq!(fs::read(trashed.join("Dress.ucas")).unwrap(), b"c");
+        assert!(!paks.parent().unwrap().join(".inzoimm-trash").exists());
         assert!(!paks.join(".inzoimm-trash").exists());
     }
 

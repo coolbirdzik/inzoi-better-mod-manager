@@ -134,15 +134,15 @@ test('quick scan changes scope and closing an active scan requests cancellation'
  expect(await page.evaluate(()=>(window as any).calls.filter((c:any)=>c.cmd==='cancel_discovery').length)).toBe(1);
 });
 
-test('Nexus archives stay separate from source selection, open their folder and import only on request',async({page})=>{
+test('Nexus archives (ZIP/7z/RAR) stay separate from source selection, open their folder and install only on request',async({page})=>{
  await desktop(page);await page.evaluate(()=>(window as any).archives=[{path:'D:/Vortex/downloads/inzoi/Hair.zip',name:'Hair.zip'},{path:'D:/Vortex/downloads/inzoi/Outfit.7z',name:'Outfit.7z'}]);
  await page.getByRole('button',{name:'Scan computer',exact:true}).click();await dialog(page).getByRole('button',{name:'Scan selected drives (3)',exact:true}).click();const section=dialog(page).getByRole('region',{name:'Nexus download archives',exact:true});
  await expect(section.getByText('Outfit.7z',{exact:true})).toBeVisible();
- await expect(section.getByRole('button',{name:'Import ZIP',exact:true})).toHaveCount(1);
+ await expect(section.getByRole('button',{name:'Install',exact:true})).toHaveCount(2);
  expect(await page.evaluate(()=>(window as any).calls.some((c:any)=>c.cmd==='import_zip'))).toBe(false);
  await section.getByRole('button',{name:'Open folder',exact:true}).first().click();
  expect(await page.evaluate(()=>(window as any).calls.find((c:any)=>c.cmd==='open_folder').args.path)).toBe('D:/Vortex/downloads/inzoi');
- await section.getByRole('button',{name:'Import ZIP',exact:true}).click();
+ await section.getByRole('button',{name:'Install',exact:true}).first().click();
  expect(await page.evaluate(()=>(window as any).calls.find((c:any)=>c.cmd==='import_zip').args.path)).toBe('D:/Vortex/downloads/inzoi/Hair.zip');
  await expect(dialog(page)).not.toBeVisible();
 });

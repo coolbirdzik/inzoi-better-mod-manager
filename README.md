@@ -15,9 +15,9 @@ I started this project after losing my mod collection while using Vortex. That e
 - **One library:** installed game mods, managed mods, attached source folders and downloaded archives appear together. Filter by source, status or tags; search names, authors, projects and paths.
 - **Grid and list views:** thumbnails, source badges, sorting, keyboard navigation, Back/Forward history, context menus and a resizable details panel.
 - **Enable and disable mods:** imported mods start disabled. Existing game mods get a library backup before the app manages them. Only one version of a ProjectName can be enabled at once.
-- **Recoverable removal:** mod files go to recovery folders; removing a source folder only detaches it from the library.
-- **Downloads:** receive inZOI Nexus `nxm://` links or paste a CurseForge file/project URL. Queue downloads, cancel, retry and open saved files. Supported ZIP mods are imported beside the archive.
-- **Mod updates:** check Nexus/CurseForge metadata, review source files when a matching variant cannot be verified, apply compatible ZIP updates and restore the previous version.
+- **Recoverable removal:** mod files go to the system Recycle Bin (Windows) or Trash (macOS). Removing a source folder only detaches it from the library.
+- **Downloads:** receive inZOI Nexus `nxm://` links or paste a CurseForge file/project URL. Queue downloads, cancel, retry and open saved files. ZIP, 7z and RAR downloads are installed automatically: mods with `mod_manifest.json` are imported beside the archive, and loose legacy PAK files are copied into `~mods`.
+- **Mod updates:** check Nexus/CurseForge metadata, review source files when a matching variant cannot be verified, apply compatible ZIP/7z/RAR updates and restore the previous version.
 - **Metadata and tags:** read local manifests and source metadata, edit tags, open source links and inspect rich descriptions.
 - **App updates:** signed packages are downloaded, installed and restarted automatically. Updates wait while settings, mod operations or downloads are active.
 - **Ten interface languages:** English is the default. Settings also offers Vietnamese, Simplified Chinese, Korean, Japanese, French, German, Spanish, Brazilian Portuguese and Russian.
@@ -35,12 +35,12 @@ Get packages from [GitHub Releases](https://github.com/coolbirdzik/inzoi-better-
 
 Updater packages have Tauri signatures. Windows publisher signing and Apple notarization are not configured, so Windows SmartScreen or macOS Gatekeeper may show a warning. On macOS, use **System Settings → Privacy & Security → Open Anyway** if the app is blocked. The game itself is required to use mods; a macOS manager build does not imply that the game runs natively on macOS.
 
-This is an actively developed project. Back up your mod folders before trying a new manager. Legacy loose PAK/UCAS/UTOC and UE4SS packages are not automatically installed. RAR/7z downloads stay visible as archives and require manual extraction; an importable mod folder must contain `mod_manifest.json`.
+This is an actively developed project. Back up your mod folders before trying a new manager. UE4SS and `LogicMods` packages are not installed automatically. Multi-part or password-protected RAR/7z archives stay visible as archives and require manual extraction.
 
 ## First run
 
 1. Open **Settings** and confirm **Game mod folder** and **Managed mods folder**. The Windows game folder defaults to `Documents\inZOI\Mods`; keep the managed folder separate.
-2. Use **Add mod** or **Import ZIP**, or open **Source folders → Add source folders** to attach an existing collection. Each source has its own **Scan subfolders** preference.
+2. Use **Add mod** or **Import archive** (ZIP, 7z or RAR), or open **Source folders → Add source folders** to attach an existing collection. Each source has its own **Scan subfolders** preference.
 3. Select a mod to see its description, source, metadata and tags. Use its switch or the details panel to enable/disable it.
 4. In **Settings**, add Nexus and/or CurseForge API keys when you want downloads or update checks. Both are optional for browsing local files.
 5. Optionally register the app for Nexus `nxm` links. This changes which application receives those links on Windows.
@@ -61,7 +61,18 @@ Downloads default to `Downloads` inside the managed folder. Change the destinati
 
 **Windows app updates:** the setup installs for the current user by default. App updates show installation progress and restart the app when finished. When setup cannot write to the installation folder, it requests administrator permission through Windows UAC and continues in the same location. The app itself does not need to run as administrator. If an older build gets stuck updating, install the fixed setup manually once.
 
-The installed app stores its catalog under its app-data directory. Windows portable builds use the adjacent `data` folder. Removal uses `.trash` and game recovery folders such as `.inzoimm-disabled`; these are recovery copies, not an independent backup. Scanning alone reads source files; enabling, disabling, editing or removing a selected mod changes files.
+The installed app stores its catalog under its app-data directory. Windows portable builds use the adjacent `data` folder. Removing a mod sends its files and any active deployment managed by the app to the system trash. Disabling a mod still moves its deployment to `.inzoimm-disabled` beside the game’s Mods folder. Scanning alone reads source files; enabling, disabling, editing or removing a selected mod changes files.
+
+### Legacy PAK mods and the inZOI Mod Enabler
+
+Older inZOI mods are loose `.pak` files (with `.utoc`, `.ucas` and sometimes `.sig`) that the game loads from `BlueClient/Content/Paks/~mods`, but only when the community **inZOI Mod Enabler** (`dsound.dll` and helpers in `BlueClient/Binaries/Win64`) is installed.
+
+- Set **Settings → Legacy PAK folder (~mods)**; **Detect** finds Steam and Epic installations.
+- Legacy mods have their own **Legacy PAK mods** group in the sidebar, separate from **All mods**. It shows whether the Mod Enabler was found and links to its [Nexus page](https://www.nexusmods.com/inzoi/mods/1) ("InZOI Mod Enabler (Engine Next)").
+- Installing an archive, or choosing a folder of loose PAK files with **Add mod**, copies each PAK set into `~mods/<archive name>/`. Files arrive with a `_disabled` suffix, so variants in one package never load together; enable the one you want in the library. Existing PAK names are never overwritten.
+- To load a downloaded mod through `~mods` instead of the library, use **Install to Legacy PAK mods** on its archive (details panel or right-click). Its `.pak/.utoc/.ucas` files are copied to `~mods` even when the package has `mod_manifest.json`.
+- An archive that contains the Mod Enabler is installed into the game folder only after you confirm. Files it replaces are kept in `Content/.inzoimm-trash`. **Install Mod Enabler…** in Settings or the library notice does the same from an archive you choose.
+- Close inZOI before installing or toggling PAK mods; the game locks files it has loaded.
 
 ## Screenshots
 
@@ -126,7 +137,7 @@ Click **Scan computer** above the library or Source folders. Automatic scanning 
 
 Review folder paths, origins, mod counts and sample names, then add selected sources. Adding sources remembers paths without moving files. Existing recursive sources are marked; selecting an existing nonrecursive source enables scanning its subfolders. Read errors, unavailable staging locations and scan limits remain visible. Quick scan skips nested links and recovery folders and has a 150,000-entry/32-level limit per root. Scan all drives removes both limits and queries Windows for every mounted local/USB drive letter. It reports visited entries, current path and mod count, and supports cancellation with partial results. Junctions, recovery folders, node_modules, .git, Recycle Bin and System Volume Information are skipped; read errors are reported. Network shares can be chosen explicitly with Scan a folder.
 
-Discovery currently requires `mod_manifest.json`, including undeployed copies in Vortex staging. It does not import Vortex profiles or enable states or support legacy PAK/UE4SS mods. ZIP/7z/RAR archives in verified Vortex inZOI download roots or with a Nexus sidecar identifying inZOI appear separately. ZIP imports require an explicit click; 7z/RAR can be opened for manual extraction. Avoid managing the same mod simultaneously in both applications. A read-only Windows smoke scan found 43 real game mods and reported the stale Vortex staging path recorded in deployment metadata. Automated tests cover temporary custom Vortex staging databases and preservation of original bytes; a populated real Vortex inZOI staging library has not been verified.
+Discovery currently requires `mod_manifest.json`, including undeployed copies in Vortex staging. It does not import Vortex profiles or enable states or UE4SS mods. ZIP/7z/RAR archives in verified Vortex inZOI download roots or with a Nexus sidecar identifying inZOI appear separately. Archives are installed only after an explicit click. Avoid managing the same mod simultaneously in both applications. A read-only Windows smoke scan found 43 real game mods and reported the stale Vortex staging path recorded in deployment metadata. Automated tests cover temporary custom Vortex staging databases and preservation of original bytes; a populated real Vortex inZOI staging library has not been verified.
 
 
 If the GitHub release download gateway cannot return `latest.json` (for example HTTP 504), the updater resolves the published stable release through the public GitHub API and reads the same manifest asset using `application/octet-stream`. Matching package assets can use their API download URLs as well. Both installed and portable builds keep the official Tauri signature verification. App-update failures have a separate notice with retry and do not overwrite mod-operation errors. A read-only Rust smoke test verified the live API manifest for 0.1.6; this does not establish a completed installed-app update cycle.

@@ -25,5 +25,9 @@ export function setLanguage(code:string){language.code=resolveLocale(code);try{l
 export function t(key:TranslationKey,params:Record<string,string|number>={}){return translate(catalogs[language.code],key,params);}
 // Backend errors are either plain text, a bare translation key, or `gameFilesLocked:<mod name>`.
 const lockedPrefix='gameFilesLocked:';
-export function errorText(raw:string,keys:readonly string[]=[]){const text=raw.replace(/^Error: /,'');if(text.startsWith(lockedPrefix))return t('gameFilesLocked',{name:text.slice(lockedPrefix.length)});return keys.includes(text)?t(text as TranslationKey):text;}
+/** Backend error prefix: the archive holds the inZOI Mod Enabler and needs confirmation. */
+export const enablerPrefix='modEnablerConfirm:';
+/** Backend error prefix: the archive has nothing the app can install. */
+export const nothingInstallablePrefix='noInstallableMod:';
+export function errorText(raw:string,keys:readonly string[]=[]){const text=raw.replace(/^Error: /,'');if(text.startsWith(lockedPrefix))return t('gameFilesLocked',{name:text.slice(lockedPrefix.length)});if(text.startsWith(enablerPrefix))return text.slice(enablerPrefix.length);if(text.startsWith(nothingInstallablePrefix))return text.slice(nothingInstallablePrefix.length);return keys.includes(text)?t(text as TranslationKey):text;}
 if(typeof document!=='undefined')document.documentElement.lang=language.code;

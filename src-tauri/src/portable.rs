@@ -277,6 +277,7 @@ mod tests {
                 scan_subfolders: true,
                 source_dirs: vec![],
                 downloads_dir: String::new(),
+                staging_dir: String::new(),
                 paks_dir: None,
             },
             mods: vec![],

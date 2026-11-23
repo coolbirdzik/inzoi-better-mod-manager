@@ -43,6 +43,9 @@ fn item(sidecar: &Path, root: &Path) -> Result<Mod> {
         return Err("Archive is outside its download folder".into());
     }
     metadata::download_destination(&path)?;
+    if archives::installed_from(&folder) {
+        return Err("Installed into the game".into());
+    }
     let extension = path
         .extension()
         .and_then(|v| v.to_str())
@@ -142,19 +145,14 @@ mod tests {
             .find(|m| m.archive)
             .unwrap();
         assert!(set_mod_enabled_core(archive.id.clone(), true, &state).is_err());
-        remove_mod_core(archive.id, &state).unwrap();
+        crate::lifecycle_tests::remove_with_mock_trash(archive.id, &state).unwrap();
         assert!(!folder.join("sample.rar").exists());
         assert!(!folder.join(".inzoimm-nexus.json").exists());
         assert!(!library::catalogue(&state.store.lock().unwrap())
             .0
             .iter()
             .any(|m| m.archive));
-        let recovery = fs::read_dir(root.join("downloads/.trash"))
-            .unwrap()
-            .next()
-            .unwrap()
-            .unwrap()
-            .path();
+        let recovery = crate::lifecycle_tests::mock_trash_path(&root, &folder);
         assert_eq!(
             fs::read(recovery.join("sample.rar")).unwrap(),
             b"original archive bytes"

@@ -228,7 +228,7 @@ fn available(
         .to_string();
     let zip = value(file, filename_key)
         .and_then(|v| v.as_str())
-        .is_some_and(|name| name.to_ascii_lowercase().ends_with(".zip"));
+        .is_some_and(|name| archives::supported(Path::new(name)));
     result.status = if zip { "available" } else { "manual" }.into();
 }
 async fn check(m: &Mod, key: &str) -> Result<(Update, Option<Origin>)> {
@@ -533,21 +533,12 @@ fn switch_version(old_id: &str, new_id: &str, state: &State, restoring: bool) ->
         let game = Path::new(&store.settings.mods_dir)
             .canonicalize()
             .map_err(err)?;
-        let staging = game
+        let recovery = game
             .parent()
             .ok_or("Missing Mods parent")?
-            .join(".inzoimm-staging");
-        let recovery = game.parent().unwrap().join(".inzoimm-disabled");
-        fs::create_dir_all(&staging).map_err(err)?;
+            .join(".inzoimm-disabled");
         fs::create_dir_all(&recovery).map_err(err)?;
-        let staged = staging.join(uuid::Uuid::new_v4().to_string());
-        let prepared = copy_tree(Path::new(&new.path), &staged)
-            .and_then(|_| enable_manifest(&staged))
-            .and_then(|_| fs::write(staged.join(".inzoimm-owner"), &new.id).map_err(err));
-        if let Err(error) = prepared {
-            let _ = fs::remove_dir_all(&staged);
-            return Err(error);
-        }
+        let staged = staging::prepare_deployment(&store.settings, &new)?;
         let backup = recovery.join(uuid::Uuid::new_v4().to_string());
         if let Err(error) = fs::rename(&target, &backup) {
             let _ = fs::remove_dir_all(staged);
@@ -654,7 +645,7 @@ fn install(token: &str, path: &str, state: &State, local: Option<&Path>) -> Resu
         .join(uuid::Uuid::new_v4().to_string());
     fs::create_dir_all(&temp).map_err(err)?;
     let result = (|| {
-        extract_zip(&archive, &temp)?;
+        archives::extract(&archive, &temp)?;
         metadata::attach_download(&archive, &temp)?;
         let matches: Vec<_> = scan_with_options(&temp, true)
             .0

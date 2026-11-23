@@ -1,8 +1,9 @@
 import {test,expect,type Page} from '@playwright/test';
 
-async function desktop(page:Page,keys:{nexus?:string;curseforge?:string}={}){
+async function desktop(page:Page,keys:{nexus?:string;curseforge?:string;nxmRegistered?:boolean}={}){
  await page.addInitScript(k=>{
   const w=window as any;w.isTauri=true;w.calls=[];let callback=0;const saved:any={nexus:k.nexus??null,curseforge:k.curseforge??null};
+  w.nxmRegistered=k.nxmRegistered??true;w.confirmNxm=true;
   const settings={mods_dir:'C:/Mods',library_dir:'C:/library',scan_subfolders:true};
   w.__TAURI_INTERNALS__={transformCallback:()=>++callback,invoke:async(cmd:string,args:any)=>{
    w.calls.push({cmd,args});
@@ -12,6 +13,9 @@ async function desktop(page:Page,keys:{nexus?:string;curseforge?:string}={}){
    if(cmd==='update_portable')return false;
    if(cmd==='load_nexus_api_key')return saved.nexus;
    if(cmd==='load_curseforge_api_key')return saved.curseforge;
+   if(cmd==='nxm_handler_registered')return w.nxmRegistered;
+   if(cmd==='plugin:dialog|message')return args.buttons.OkCancelCustom[w.confirmNxm?0:1];
+   if(cmd==='register_nxm'){w.nxmRegistered=true;return null;}
    if(cmd==='save_nexus_api_key')saved.nexus=args.apiKey||null;
    if(cmd==='save_curseforge_api_key')saved.curseforge=args.apiKey||null;
    return null;
@@ -43,7 +47,7 @@ test('one missing key shows the dialog, can be closed only by continuing, and le
  await panel.locator('#curseforge-api-key').fill('CF');await panel.getByRole('button',{name:'Continue',exact:true}).click();
  await page.getByRole('button',{name:'Settings'}).click();
  await expect(page.getByRole('status',{name:/missing/})).toHaveCount(0);
- await page.getByRole('dialog').locator('#nexus-api-key').fill('');
+ await page.getByRole('region',{name:'Settings',exact:true}).locator('#nexus-api-key').fill('');
  await page.keyboard.press('Escape');
  await expect(page.getByRole('status',{name:'1 API key(s) missing'})).toBeVisible();
 });
@@ -55,6 +59,41 @@ test('with both keys saved there is no onboarding and no badge',async({page})=>{
  await expect(page.getByRole('status',{name:/missing/})).toHaveCount(0);
 });
 
+test('Vortex links add one to Settings until this app is the registered handler',async({page})=>{
+ await desktop(page,{nexus:'NEXUS',nxmRegistered:false});
+ await dialog(page).getByRole('button',{name:'Skip for now',exact:true}).click();
+ const badge=page.locator('aside .settings-count');
+ await expect(badge).toHaveText('2');
+ await expect(badge).toHaveAttribute('title',/1 API key.*Vortex links/);
+ await page.getByRole('button',{name:'Settings',exact:true}).click();
+ const status=page.locator('#nxm-status');
+ await expect(status).toBeVisible();
+ await expect(status).toHaveText('This app is not set to open Vortex links');
+ const register=page.getByRole('button',{name:'Use this app for Vortex links',exact:true});
+ await expect(register).toHaveAccessibleDescription('This app is not set to open Vortex links');
+ await page.evaluate(()=>{(window as any).confirmNxm=false});
+ await register.click();
+ await expect(register).toBeEnabled();
+ await expect(badge).toHaveText('2');
+ await expect(status).toHaveText('This app is not set to open Vortex links');
+ expect(await page.evaluate(()=>(window as any).calls.some((c:any)=>c.cmd==='register_nxm'))).toBe(false);
+ await page.evaluate(()=>{(window as any).confirmNxm=true});
+ await register.click();
+ await expect(badge).toHaveText('1');
+ await expect(status).toHaveText('This app opens Vortex links');
+ await expect(badge).toHaveAttribute('title','1 API key(s) missing');
+ await page.evaluate(()=>{(window as any).nxmRegistered=false;window.dispatchEvent(new Event('focus'))});
+ await expect(badge).toHaveText('2');
+ await expect(status).toHaveText('This app is not set to open Vortex links');
+ await page.getByRole('region',{name:'Settings',exact:true}).locator('#curseforge-api-key').fill('CF');
+ await expect(badge).toHaveText('1');
+ await register.click();
+ await expect(badge).toHaveCount(0);
+ await page.evaluate(()=>{(window as any).nxmRegistered=null;window.dispatchEvent(new Event('focus'))});
+ await expect(status).toHaveText('Vortex link status is unavailable');
+ await expect(badge).toHaveCount(0);
+});
+
 test('skipping leaves keys empty, keeps the badge and skips update checks for providers without a key',async({page})=>{
  await desktop(page);
  await dialog(page).getByRole('button',{name:'Skip for now',exact:true}).click();
@@ -62,5 +101,5 @@ test('skipping leaves keys empty, keeps the badge and skips update checks for pr
  await expect(page.getByRole('status',{name:'2 API key(s) missing'})).toBeVisible();
  expect(await page.evaluate(()=>(window as any).calls.some((c:any)=>c.cmd.startsWith('save_')))).toBe(false);
  await page.getByRole('button',{name:'Settings'}).click();
- await expect(page.getByRole('dialog').getByText('Not connected')).toHaveCount(2);
+ await expect(page.getByRole('region',{name:'Settings',exact:true}).getByText('Not connected')).toHaveCount(2);
 });

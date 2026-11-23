@@ -1,7 +1,7 @@
 import {test,expect,type Page} from '@playwright/test';
 import {readFileSync} from 'node:fs';
 
-async function desktop(page:Page,initialSettings?:{library_dir:string;downloads_dir?:string}){
+async function desktop(page:Page,initialSettings?:{library_dir:string;downloads_dir?:string;paks_dir?:string}){
  await page.addInitScript(initialSettings=>{
   const w=window as any;w.isTauri=true;w.calls=[];w.downloads={};w.callbacks={};w.listeners=[];let callback=0;
   let settings=JSON.parse(localStorage.getItem('downloads.settings')||'null')??{mods_dir:'C:/Mods',library_dir:'C:/Library',scan_subfolders:true,...initialSettings};
@@ -11,7 +11,7 @@ async function desktop(page:Page,initialSettings?:{library_dir:string;downloads_
    if(cmd==='load_nexus_api_key'||cmd==='load_curseforge_api_key')return 'TEST_KEY';
    w.calls.push({cmd,args});
    if(cmd==='plugin:event|listen'){w.listeners.push(args);return w.listeners.length;}
-   if(cmd==='snapshot')return {mods:[...mods,...w.archives.filter((a:any)=>!mods.some(m=>m.path.startsWith(a.path.replace(/[^/]+$/,''))))],settings,warnings:[]};
+   if(cmd==='snapshot')return {mods:[...mods,...(w.legacyMods??[]),...w.archives.filter((a:any)=>!mods.some(m=>m.path.startsWith(a.path.replace(/[^/]+$/,''))))],settings,warnings:[],mod_enabler:w.modEnabler,game_dir:w.gameDir};
    if(cmd==='pending_links')return [];
    if(cmd==='is_portable')return true;
    if(cmd==='update_portable')return false;
@@ -19,8 +19,11 @@ async function desktop(page:Page,initialSettings?:{library_dir:string;downloads_
    if(cmd==='save_settings'){settings={...args.settings};localStorage.setItem('downloads.settings',JSON.stringify(settings));}
    if(cmd==='download_nxm')return new Promise((resolve,reject)=>{w.downloads[args.requestId]={resolve,reject}});
    if(cmd==='cancel_nxm'){w.downloads[args.requestId].reject('downloadCancelled');}
+   if(cmd==='plugin:dialog|message')return args.buttons.OkCancelCustom[w.declineEnabler?1:0];
    if(cmd==='import_download'){
     if(w.failImports)throw 'Import failed';
+    if(w.enablerArchive&&!args.enabler)throw 'modEnablerConfirm:This archive contains the inZOI Mod Enabler.';
+    if(w.importReport)return w.importReport;
     mods.push({id:args.path,name:'Downloaded outfit',project:args.path,author:'Creator',version:'1',path:args.path.replace(/mod\.zip$/,'Imported'),managed:true,enabled:false,source:'',description:'',thumbnail:w.importedThumbnail??null});
    }
    return null;
@@ -136,7 +139,7 @@ test('failed imports retain the archive and retry importing without downloading 
  await page.screenshot({path:'test-results/download-queue.png',fullPage:true});
 });
 
-test('7z/RAR remain available and are clearly marked as requiring extraction',async({page})=>{
+test('archives the app cannot install remain available and are clearly marked as requiring extraction',async({page})=>{
  await desktop(page);await send(page,1);await page.getByRole('button',{name:'OK',exact:true}).click();await page.getByRole('button',{name:/^Downloads/}).click();
  await finish(page,1,false);await expect(page.getByText('Downloaded · extraction needed',{exact:true})).toBeVisible();
  expect(await page.evaluate(()=>(window as any).calls.some((c:any)=>c.cmd==='import_download'))).toBe(false);
@@ -146,7 +149,7 @@ test('7z/RAR remain available and are clearly marked as requiring extraction',as
  await expect.poll(()=>page.evaluate(()=>(window as any).calls.find((c:any)=>c.cmd==='open_folder')?.args)).toEqual({path:'D:/Nexus downloads/Outfit [nexus-1]/files/file-10'});
 });
 
-test('RAR downloads remain in Managed mods after restarting, with metadata and no installation actions',async({page})=>{
+test('RAR downloads remain in Managed mods after restarting, with metadata and only an Install action',async({page})=>{
  const image='https://staticdelivery.nexusmods.com/mods/7480/images/651/preview.jpg';
  await page.route(image,route=>route.fulfill({contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=','base64')}));
  await desktop(page,{library_dir:'C:/Library',downloads_dir:'D:/Nexus downloads'});
@@ -159,6 +162,7 @@ test('RAR downloads remain in Managed mods after restarting, with metadata and n
  await expect(card).toContainText('Downloaded archive');await card.click();
  await expect(card.locator('img')).toHaveAttribute('src',image);
  await expect(page.locator('.inspector-status')).toHaveText('Not installed');
+ await expect(page.locator('.inspector-actions').getByRole('button',{name:'Install',exact:true})).toBeVisible();
  await expect(page.getByRole('button',{name:'Enable in game',exact:true})).toHaveCount(0);
  await expect(page.getByRole('button',{name:'Copy to library',exact:true})).toHaveCount(0);
  await page.getByRole('button',{name:'Open folder',exact:true}).click();
@@ -222,4 +226,79 @@ test('cancel does not animate and reduced motion confirms the queue without a fl
  await send(page,2);await popup.getByRole('button',{name:'OK',exact:true}).click();await expect(page.locator('.download-handoff-flight')).toHaveCount(0);await expect(page.getByRole('status').filter({hasText:'Added to downloads'})).toBeVisible();
  expect(await page.locator('.downloads-button').evaluate(node=>node.getAnimations().every(animation=>!(animation.effect as KeyframeEffect).getKeyframes().some(frame=>frame.transform)))).toBe(true);
  await page.getByRole('button',{name:/^Downloads/}).click();await expect(page.getByRole('dialog',{name:'Downloads',exact:true})).toContainText('Downloading');
+});
+
+test('saved RAR archives install from the library, report legacy PAK mods and ask before installing the Mod Enabler',async({page})=>{
+ await desktop(page);await send(page,7);await page.getByRole('button',{name:'OK',exact:true}).click();
+ await page.getByRole('button',{name:/^Downloads/}).click();await finish(page,7,false,'rar');
+ await expect(page.getByText('Downloaded · extraction needed',{exact:true})).toBeVisible();
+ await page.keyboard.press('Escape');await page.getByRole('button',{name:/^All mods \d+$/}).click();
+ await page.locator('.mod-row').filter({hasText:'Downloaded package 7'}).click();
+ const install=page.locator('.inspector-actions').getByRole('button',{name:'Install',exact:true});
+ const path='D:/Nexus downloads/Outfit [nexus-7]/files/file-70/mod.rar';
+ const imports=()=>page.evaluate(()=>(window as any).calls.filter((c:any)=>c.cmd==='import_download').map((c:any)=>c.args));
+ await page.evaluate(()=>{(window as any).importReport={imported:0,legacy:2,enabler:false,needs_enabler:true}});
+ await install.click();
+ await expect(page.getByRole('status').filter({hasText:'2 legacy PAK mod(s) copied to ~mods (disabled). Enable them under Legacy PAK mods.'})).toBeVisible();
+ expect(await imports()).toEqual([{path}]);
+ await expect(page.getByRole('heading',{level:1})).toHaveText('Legacy PAK mods');
+ await page.getByRole('button',{name:'Back',exact:true}).click();await expect(install).toBeVisible();
+ await page.evaluate(()=>{const w=window as any;w.enablerArchive=true;w.declineEnabler=true;w.importReport={imported:0,legacy:0,enabler:true,needs_enabler:false}});
+ await install.click();
+ await expect.poll(()=>page.evaluate(()=>(window as any).calls.filter((c:any)=>c.cmd==='plugin:dialog|message').length)).toBe(1);
+ expect(await imports()).toEqual([{path},{path}]);
+ await expect(page.getByRole('alert')).toHaveCount(0);
+ await page.evaluate(()=>{(window as any).declineEnabler=false});
+ await install.click();
+ await expect(page.getByRole('status').filter({hasText:'inZOI Mod Enabler installed into the game folder.'})).toBeVisible();
+ expect((await imports()).at(-1)).toEqual({path,enabler:true});
+});
+
+test('legacy PAK mods without the Mod Enabler show a notice that installs it from a chosen archive',async({page})=>{
+ await page.addInitScript(()=>{const w=window as any;w.modEnabler=false;w.legacyMods=[{id:'legacy:/hair',name:'Hair',project:'Hair',path:'C:/Game/BlueClient/Content/Paks/~mods/Hair.pak',legacy:true,managed:false,enabled:true,author:'',version:'',source:'',description:'',thumbnail:null}]});
+ await desktop(page);
+ const notice=page.locator('.mod-enabler-notice');
+ await expect(notice).toContainText('the inZOI Mod Enabler was not found');
+ await notice.getByRole('button',{name:'Install Mod Enabler…',exact:true}).click();
+ await expect.poll(()=>page.evaluate(()=>(window as any).calls.find((c:any)=>c.cmd==='install_mod_enabler')?.args)).toEqual({path:'D:/Nexus downloads'});
+ await notice.getByRole('button',{name:'Close',exact:true}).click();await expect(notice).toHaveCount(0);
+});
+
+test('legacy PAK mods have their own group with the Mod Enabler status and its Nexus download link',async({page})=>{
+ await page.addInitScript(()=>{const w=window as any;w.modEnabler=false;w.gameDir='C:/Game';w.legacyMods=[{id:'legacy:/hair',name:'Old Hair',project:'OldHair',path:'C:/Game/BlueClient/Content/Paks/~mods/OldHair.pak',legacy:true,managed:false,enabled:false,author:'',version:'',source:'',description:'',thumbnail:null}]});
+ await desktop(page);
+ await expect(page.getByRole('button',{name:/^All mods 0$/})).toBeVisible();
+ await expect(page.locator('.mod-row').filter({hasText:'Old Hair'})).toHaveCount(0);
+ const entry=page.locator('aside .legacy-entry');
+ await expect(entry).toContainText('Legacy PAK mods');await expect(entry).toContainText('1');
+ await entry.click();
+ await expect(page.getByRole('heading',{level:1})).toHaveText('Legacy PAK mods');
+ await expect(page.locator('.mod-row').filter({hasText:'Old Hair'})).toHaveCount(1);
+ await expect(page.locator('.mod-enabler-notice')).toHaveCount(0);
+ const panel=page.locator('.legacy-panel');
+ await expect(panel).toContainText('inZOI Mod Enabler: not found');
+ await panel.getByRole('button',{name:'Download Mod Enabler',exact:true}).click();
+ await expect.poll(()=>page.evaluate(()=>(window as any).calls.find((c:any)=>c.cmd==='plugin:opener|open_url')?.args.url)).toBe('https://www.nexusmods.com/inzoi/mods/1');
+ await panel.getByRole('button',{name:'Open game folder',exact:true}).click();
+ await expect.poll(()=>page.evaluate(()=>(window as any).calls.find((c:any)=>c.cmd==='open_folder')?.args)).toEqual({path:'C:/Game'});
+ await page.getByRole('button',{name:'Back',exact:true}).click();
+ await expect(page.getByRole('heading',{level:1})).toHaveText('Your library');
+});
+
+test('a saved archive can be installed into Legacy PAK mods instead of the library',async({page})=>{
+ await desktop(page,{library_dir:'C:/Library',paks_dir:'C:/Game/BlueClient/Content/Paks/~mods'});
+ await send(page,8);await page.getByRole('button',{name:'OK',exact:true}).click();
+ await page.getByRole('button',{name:/^Downloads/}).click();await finish(page,8,false,'7z');
+ await page.keyboard.press('Escape');await page.getByRole('button',{name:/^All mods \d+$/}).click();
+ const card=page.locator('.mod-row').filter({hasText:'Downloaded package 8'});
+ await card.click({button:'right'});
+ const menu=page.getByRole('menu',{name:'Context menu'});
+ await expect(menu.getByRole('menuitem',{name:'Install',exact:true})).toBeVisible();
+ await expect(menu.getByRole('menuitem',{name:'Install to Legacy PAK mods',exact:true})).toBeVisible();
+ await page.keyboard.press('Escape');await card.click();
+ await page.evaluate(()=>{(window as any).importReport={imported:0,legacy:1,enabler:false,needs_enabler:false}});
+ await page.locator('.inspector-actions').getByRole('button',{name:'Install to Legacy PAK mods',exact:true}).click();
+ await expect.poll(()=>page.evaluate(()=>(window as any).calls.filter((c:any)=>c.cmd==='import_download').map((c:any)=>c.args))).toEqual([{path:'D:/Nexus downloads/Outfit [nexus-8]/files/file-80/mod.7z',legacy:true}]);
+ await expect(page.getByRole('heading',{level:1})).toHaveText('Legacy PAK mods');
+ await expect(page.getByRole('status').filter({hasText:'1 legacy PAK mod(s) copied to ~mods (disabled)'})).toBeVisible();
 });

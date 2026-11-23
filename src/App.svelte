@@ -1,5 +1,5 @@
 <script lang="ts">
- import { language, languages, setLanguage, t, errorText, type TranslationKey } from './lib/i18n.svelte';
+ import { language, languages, setLanguage, t, errorText, enablerPrefix, nothingInstallablePrefix, type TranslationKey } from './lib/i18n.svelte';
  import { onMount } from 'svelte';
  import { invoke, isTauri, Channel } from '@tauri-apps/api/core';
  import { listen } from '@tauri-apps/api/event';
@@ -8,7 +8,7 @@
  import { check, Update } from '@tauri-apps/plugin-updater';
  import { relaunch } from '@tauri-apps/plugin-process';
  import { getCurrent } from '@tauri-apps/plugin-deep-link';
- import { IconSearch, IconPlus, IconRefresh, IconSettings, IconBox, IconFolder, IconArrowUpRight, IconDownload, IconTrash, IconPencil, IconCommand, IconX, IconChevronRight, IconLayoutGrid, IconList, IconPhoto, IconArrowLeft, IconArrowRight, IconInfoCircle, IconArrowsSort, IconMaximize, IconStack2, IconHistory, IconZoomScan, IconTag, IconFileZip } from '@tabler/icons-svelte';
+ import { IconSearch, IconPlus, IconRefresh, IconSettings, IconBox, IconFolder, IconArrowUpRight, IconDownload, IconTrash, IconPencil, IconCommand, IconX, IconChevronRight, IconLayoutGrid, IconList, IconPhoto, IconArrowLeft, IconArrowRight, IconInfoCircle, IconArrowsSort, IconMaximize, IconStack2, IconHistory, IconZoomScan, IconTag, IconFileZip, IconArchive } from '@tabler/icons-svelte';
  import { modCategory, groupMods, type ModCategory, type CategoryKey } from './lib/categories';
  import ModThumbnail from './lib/ModThumbnail.svelte';
  import AppInfo from './lib/AppInfo.svelte';
@@ -26,14 +26,25 @@
  import ResizableInspector from './lib/ResizableInspector.svelte';
  import SourceManager, {type ManagedSource} from './lib/SourceManager.svelte';
  import ContextMenu, {type MenuItem} from './lib/ContextMenu.svelte';
- import { folders, inside, pathKey, normalizePath, folderName, modFolder, sourceFolders, webLinks, modOrigin, type Folder } from './lib/library';
+ import { folders, inside, pathKey, normalizePath, folderName, modFolder, sourceFolders, webLinks, modOrigin, modEnablerUrl, type Folder } from './lib/library';
  import ModDiscovery from './lib/ModDiscovery.svelte';
  import type {Discovery,DiscoveryProgress} from './lib/types';
- import type { Mod, Snapshot, Settings, ModUpdate } from './lib/types';
+ import type { Mod, Snapshot, Settings, ModUpdate, InstallReport } from './lib/types';
  import { initialLibrarySort, saveLibrarySort, sortLibrary, type LibrarySort } from './lib/library-sort';
  const openFolder=(path:string)=>invoke<void>('open_folder',{path});
- let data=$state<Snapshot|null>(null), query=$state(''), filter=$state('all'), selected=$state(''), busy=$state(false), error=$state(''), message=$state('');
+ let data=$state<Snapshot|null>(null), query=$state(''), filter=$state('all'), selected=$state(''), busy=$state(false), error=$state(''), message=$state(''), messageParams=$state<Record<string,string|number>>({}), enablerNoticeHidden=$state(false);
  let settingsOpen=$state(false), draft=$state<Settings|null>(null), editOpen=$state(false), editName=$state(''), editDescription=$state('');
+ let modToggle=$state<{name:string;enabled:boolean}|null>(null);
+ let stagingSaving=$state(false);
+ const operationLabel=$derived(modToggle
+  ?t(modToggle.enabled?'enablingMod':'disablingMod',{name:modToggle.name})
+  :stagingSaving?t('movingStaging'):'');
+ let operationVisible=$state(false);
+ $effect(()=>{
+  if(!operationLabel){operationVisible=false;return}
+  const timer=setTimeout(()=>{operationVisible=true},160);
+  return()=>clearTimeout(timer);
+ });
  let discoveryOpen=$state(false), discovery=$state<Discovery|null>(null), scanProgress=$state<DiscoveryProgress|null>(null), scanCancelling=$state(false), scanDrives=$state<string[]>([]);
  let scanRequestId=$state('');
  let importOpen=$state(false), importPath=$state(''), importRecursive=$state(true), addingSource=$state(false), sourcePaths=$state<string[]>([]);
@@ -67,6 +78,30 @@
  const keyFor=(info:NexusInfo)=>info.provider==='curseforge'?curseforgeKey:nexusKey;
  const keyReady=(info:NexusInfo)=>info.provider==='curseforge'?curseforgeKeyReady:nexusKeyReady;
  const missingKeys=$derived((nexusKey.trim()?0:1)+(curseforgeKey.trim()?0:1));
+ let nxmRegistered=$state<boolean|null>(null), nxmStatusRequest=0;
+ const readyMissingKeys=$derived(nexusKeyReady&&curseforgeKeyReady?missingKeys:0);
+ const settingsCount=$derived(readyMissingKeys+(nxmRegistered===false?1:0));
+ const settingsAttention=$derived([
+  readyMissingKeys?t('keysMissingBadge',{count:readyMissingKeys}):'',
+  nxmRegistered===false?t('nxmHandlerMissing'):'',
+ ].filter(Boolean).join(' · '));
+ async function refreshNxmRegistration(){
+  if(!isTauri())return;
+  const request=++nxmStatusRequest;
+  try{
+   const registered=await invoke<boolean|null>('nxm_handler_registered');
+   if(request===nxmStatusRequest)nxmRegistered=registered;
+   return registered;
+  }catch{/* Keep the last known registration state if the OS query fails. */}
+ }
+ async function registerNxm(){
+  await run(async()=>{
+   if(!await confirm(t('nxmConfirm'),{title:t('nxmTitle'),okLabel:t('confirm'),cancelLabel:t('cancel')}))return;
+   await invoke('register_nxm');
+   if(await refreshNxmRegistration()===false){error='nxmHandlerMissing';return}
+   message='nxmRegistered';
+  });
+ }
  let onboardingOpen=$state(false), onboardingChecked=false;
  $effect(()=>{if(onboardingChecked||!nexusKeyReady||!curseforgeKeyReady||updating)return;onboardingChecked=true;if(missingKeys>0){closeContext();onboardingOpen=true}});
  const pendingCount=$derived(jobs.filter(pendingDownload).length);
@@ -94,9 +129,9 @@
     result=await invoke<DownloadResult>('download_nxm',{requestId:id,apiKey:keyFor(job.info).trim()});
     patchJob(id,{result,received:result.bytes});
    }
-   if(result.can_import){patchJob(id,{status:'importing'});if(job.update){selected=await invoke<string>('install_mod_update',{token:job.update.token,path:result.path});modChecks={...modChecks,[job.update.id]:undefined}}else await invoke('import_download',{path:result.path});patchJob(id,{status:'completed',error:undefined})}
+   if(result.can_import){patchJob(id,{status:'importing'});if(job.update){selected=await invoke<string>('install_mod_update',{token:job.update.token,path:result.path});modChecks={...modChecks,[job.update.id]:undefined}}else{const report=await installArchive('import_download',result.path);if(!report){patchJob(id,{status:'importFailed',error:'modEnablerDeclined'});return}showInstallReport(report)}patchJob(id,{status:'completed',error:undefined})}
    else patchJob(id,{status:'needsExtraction',error:undefined});
-  }catch(e){const detail=String(e).replace(/^Error: /,'');const cancelled=detail==='downloadCancelled';const saved=jobs.find(j=>j.info.request_id===id)?.result;patchJob(id,{status:cancelled?'cancelled':saved?'importFailed':'failed',error:cancelled?undefined:detail})}
+  }catch(e){const detail=String(e).replace(/^Error: /,'');const cancelled=detail==='downloadCancelled';const saved=jobs.find(j=>j.info.request_id===id)?.result;if(saved&&detail.startsWith(nothingInstallablePrefix))patchJob(id,{status:'needsExtraction',error:undefined});else patchJob(id,{status:cancelled?'cancelled':saved?'importFailed':'failed',error:cancelled?undefined:detail})}
   finally{if(jobs.find(job=>job.info.request_id===id)?.result){try{await refresh()}catch(e){error=String(e)}}processing=false}
  }
  async function cancelDownload(job:DownloadJob){
@@ -123,7 +158,7 @@
  }
  function openCheckLog(){if(updating)return;metadataOpen=false;settingsOpen=false;editOpen=false;importOpen=false;downloadsOpen=false;dismissLink();checkLogCopied=false;checkLogFallback='';checkLogsOpen=true;void loadCheckLog()}
  async function copyCheckLog(entries:CheckLog[]){const text=formatCheckLog(entries,[nexusKey,curseforgeKey]);checkLogCopied=false;checkLogFallback='';try{await navigator.clipboard.writeText(text);checkLogCopied=true}catch{checkLogFallback=text}}
- function inspectCheckLog(entry:CheckLog){const m=libraryMods.find(m=>m.id===entry.mod_id||m.project===entry.project);if(!m)return;checkLogsOpen=false;navigate({filter:'all',folder:'',query:'',tagFilter:'',selected:m.id,manageSources:false});modSections[m.id]=true}
+ function inspectCheckLog(entry:CheckLog){const m=libraryMods.find(m=>m.id===entry.mod_id||m.project===entry.project);if(!m)return;checkLogsOpen=false;navigate({filter:'all',folder:'',query:'',tagFilter:'',selected:m.id,manageSources:false,legacy:!!m.legacy});modSections[m.id]=true}
  let metadataOpen=$state(false);
  let modSections=$state<Record<string,boolean>>({});
  let checkGeneration=0;
@@ -154,7 +189,8 @@
  async function restoreMod(m:Mod){await run(async()=>{if(await confirm(t('restoreModConfirm',{name:m.name}),{title:t('restorePreviousMod'),okLabel:t('confirm'),cancelLabel:t('cancel')})){try{selected=await invoke<string>('restore_previous_mod',{id:m.id});modChecks={...modChecks,[m.id]:undefined}}finally{await refresh()}}})}
  function updateError(value:string){return errorText(value,['nexusApiKeyRequired','curseforgeApiKeyRequired'])}
  let updateStatus=$state<TranslationKey>('checkingUpdates'), appUpdateError=$state('');
- let input:HTMLInputElement;
+ let input=$state<HTMLInputElement>();
+ type FolderKey='mods_dir'|'library_dir'|'paks_dir';
  type ViewMode = 'grid' | 'list';
  function initialView():ViewMode {try{return localStorage.getItem('inzoimm.view')==='list'?'list':'grid'}catch{return 'grid'}}
  let view=$state<ViewMode>(initialView());
@@ -163,7 +199,7 @@
  let modItems=$state<HTMLDivElement>(), modList=$state<HTMLElement>();
  function setView(mode:ViewMode){view=mode;try{localStorage.setItem('inzoimm.view',mode)}catch{/* Keep the session preference. */}}
  async function chooseThumbnail(m:Mod){await run(async()=>{const path=await open({multiple:false,title:t('chooseThumbnail'),filters:[{name:t('imageFiles'),extensions:['png','jpg','jpeg','webp']}]});if(path){await invoke('set_mod_thumbnail',{id:m.id,path});await refresh()}})}
- let folder=$state(''), tagFilter=$state(''), manageSources=$state(false), sourceQuery=$state('');
+ let folder=$state(''), tagFilter=$state(''), manageSources=$state(false), sourceQuery=$state(''), legacyView=$state(false);
  const sourcesView=$derived(manageSources);
  const attachedSources=$derived(sourceFolders(data?.settings));
  const folderTree=$derived(folders(data?.settings,libraryMods));
@@ -174,25 +210,28 @@
  const sourceRows=$derived<ManagedSource[]>(managedRoots.map(root=>({...root,label:rootLabel(root),configurable:root.kind==='source'||(root.kind==='managed'&&!!data&&pathKey(root.path)===pathKey(data.settings.library_dir)),recursive:sourceScan(root.path)})));
  const allTags=$derived([...new Set(libraryMods.flatMap(m=>m.tags??[]))].sort((a,b)=>a.localeCompare(b)));
  $effect(()=>{if(data&&tagFilter&&!allTags.includes(tagFilter))tagFilter=''});
- type Location={filter:string;folder:string;query:string;tagFilter:string;selected:string;scroll:number;manageSources:boolean};
+ type Location={filter:string;folder:string;query:string;tagFilter:string;selected:string;scroll:number;manageSources:boolean;legacy:boolean};
  let locations=$state<Location[]>([]), locationIndex=$state(0);
  const historySession=crypto.randomUUID();
  const canBack=$derived(locationIndex>0), canForward=$derived(locationIndex<locations.length-1);
- function location():Location{return{filter,folder,query,tagFilter,selected,manageSources,scroll:modList?.scrollTop??0}}
+ function location():Location{return{filter,folder,query,tagFilter,selected,manageSources,legacy:legacyView,scroll:modList?.scrollTop??0}}
  function navigate(next:Partial<Location>){
-  closeContext();
+  closeContext();settingsOpen=false;
   if(locations.length)locations[locationIndex]=location();
   const nextLocation={...location(),...next,scroll:next.scroll??0};
-  if(nextLocation.filter===filter&&pathKey(nextLocation.folder)===pathKey(folder)&&nextLocation.query===query&&nextLocation.tagFilter===tagFilter&&nextLocation.selected===selected&&nextLocation.manageSources===manageSources)return;
+  if(nextLocation.filter===filter&&pathKey(nextLocation.folder)===pathKey(folder)&&nextLocation.query===query&&nextLocation.tagFilter===tagFilter&&nextLocation.selected===selected&&nextLocation.manageSources===manageSources&&nextLocation.legacy===legacyView)return;
   locations=[...locations.slice(0,locationIndex+1),nextLocation];locationIndex=locations.length-1;
   window.history.pushState({inzoimm:historySession,index:locationIndex},'');restoreLocation(nextLocation);
  }
- function restoreLocation(point:Location){manageSources=point.manageSources;filter=point.filter;folder=point.folder;query=point.query;tagFilter=point.tagFilter;selected=point.selected;requestAnimationFrame(()=>{if(modList)modList.scrollTop=point.scroll})}
+ function restoreLocation(point:Location){manageSources=point.manageSources;legacyView=point.legacy??false;filter=point.filter;folder=point.folder;query=point.query;tagFilter=point.tagFilter;selected=point.selected;requestAnimationFrame(()=>{if(modList)modList.scrollTop=point.scroll})}
  function historyMove(delta:number){if(settingsOpen||editOpen||linkOpen||importOpen||downloadsOpen||checkLogsOpen||metadataOpen||discoveryOpen||updating)return;closeContext();if(delta<0?!canBack:!canForward)return;locations[locationIndex]=location();window.history.go(delta)}
  function historyPop(e:PopStateEvent){if(e.state?.inzoimm!==historySession||!locations[e.state.index])return;locations[locationIndex]=location();locationIndex=e.state.index;closeContext();restoreLocation(locations[locationIndex])}
  function mouseNavigation(e:MouseEvent){if(e.button!==3&&e.button!==4)return;e.preventDefault();e.stopPropagation();if(e.type==='mouseup')historyMove(e.button===3?-1:1)}
  function browse(path:string){navigate({folder:path,filter:'all',selected:'',manageSources:false})}
- function chooseFilter(value:string){navigate({filter:value,folder:'',selected:'',manageSources:false})}
+ function chooseFilter(value:string){navigate({filter:value,folder:'',selected:'',manageSources:false,legacy:false})}
+ function openLegacy(){navigate({filter:'all',folder:'',selected:'',manageSources:false,legacy:true})}
+ const legacyMods=$derived(libraryMods.filter(m=>m.legacy));
+ const showLegacyEntry=$derived(legacyMods.length>0||!!data?.settings.paks_dir);
  function managedTabKeys(e:KeyboardEvent){if(!['ArrowLeft','ArrowRight','Home','End'].includes(e.key))return;e.preventDefault();e.stopPropagation();const next=e.key==='Home'?false:e.key==='End'?true:!manageSources;navigate({manageSources:next,folder:''});requestAnimationFrame(()=>document.getElementById(next?'managed-sources-tab':'managed-mods-tab')?.focus())}
  async function scanComputer(paths?:string[],allDrives=true,drives?:string[]){await run(async()=>{
   discovery=null;scanProgress=null;scanCancelling=false;const id=crypto.randomUUID();scanRequestId=id;
@@ -204,8 +243,22 @@
  function openDiscovery(){if(busy||updating||!data)return;closeContext();discoveryOpen=true;discovery=null;scanProgress=null;void loadScanDrives()}
  async function loadScanDrives(){try{scanDrives=(await invoke<string[]>('list_scan_drives'))??[]}catch(e){scanDrives=[];error=String(e)}}
  async function chooseDiscoveryFolder(){if(busy||updating)return;try{const paths=await open({directory:true,multiple:true,title:t('scanChooseFolder')});if(paths)await scanComputer(typeof paths==='string'?[paths]:paths,false)}catch(e){error=String(e)}}
- async function importDiscoveredArchive(path:string){await run(async()=>{await invoke('import_zip',{path});await refresh();message='zipImported';discoveryOpen=false})}
- async function addDiscovered(paths:string[]){await run(async()=>{if(!data)return;const sources=sourceFolders(data.settings).map(source=>paths.some(path=>pathKey(path)===pathKey(source.path))?{...source,scan_subfolders:true}:source);for(const path of paths){if(![data.settings.mods_dir,data.settings.library_dir,...sources.map(s=>s.path)].some(root=>pathKey(root)===pathKey(path)))sources.push({path,scan_subfolders:true})}await invoke('save_settings',{settings:{...data.settings,scan_subfolders:data.settings.scan_subfolders||paths.some(path=>pathKey(path)===pathKey(data!.settings.library_dir)),source_dirs:sources}});await refresh();discoveryOpen=false;navigate({filter:'all',folder:'',selected:'',manageSources:false})})}
+ async function importDiscoveredArchive(path:string){await run(async()=>{const report=await installArchive('import_zip',path);if(!report)return;await refresh();discoveryOpen=false;revealInstall(report)})}
+ /** Installs an archive; asks before writing the inZOI Mod Enabler into the game. Returns null when declined. */
+ async function installArchive(command:'import_zip'|'import_download',path:string,legacy=false):Promise<InstallReport|null>{
+  const args=legacy?{path,legacy:true}:{path};
+  const empty:InstallReport={imported:0,legacy:0,enabler:false,needs_enabler:false};
+  try{return await invoke<InstallReport|null>(command,args)??empty}
+  catch(e){if(!String(e).includes(enablerPrefix))throw e;if(!await confirm(t('modEnablerConfirm'),{title:t('modEnablerTitle'),okLabel:t('confirm'),cancelLabel:t('cancel')}))return null;return await invoke<InstallReport|null>(command,{...args,enabler:true})??empty}
+ }
+ async function openEnablerPage(){await run(async()=>{await openUrl(modEnablerUrl)})}
+ /** For installs the user started: show the result where the new mods are listed. */
+ function revealInstall(report:InstallReport){showInstallReport(report);if(report.legacy)openLegacy()}
+ /** Installs a saved archive from the library; `legacy` puts its PAK files into ~mods instead. */
+ async function installSavedArchive(mod:Mod,legacy=false){await run(async()=>{const report=await installArchive('import_download',mod.path,legacy);if(!report)return;await refresh();revealInstall(report)})}
+ function showInstallReport(report:InstallReport){messageParams={count:report.legacy};message=report.enabler?'modEnablerInstalled':report.legacy?(report.needs_enabler?'legacyInstalledNoEnabler':'legacyInstalled'):'zipImported'}
+ async function chooseModEnabler(){await run(async()=>{const p=await open({multiple:false,title:t('installModEnabler'),filters:[{name:t('zipArchive'),extensions:['zip','7z','rar']}]});if(p){await invoke('install_mod_enabler',{path:p});await refresh();messageParams={};message='modEnablerInstalled'}})}
+ async function addDiscovered(paths:string[]){await run(async()=>{if(!data)return;const sources=sourceFolders(data.settings).map(source=>paths.some(path=>pathKey(path)===pathKey(source.path))?{...source,scan_subfolders:true}:source);for(const path of paths){if(![data.settings.mods_dir,data.settings.library_dir,...sources.map(s=>s.path)].some(root=>pathKey(root)===pathKey(path)))sources.push({path,scan_subfolders:true})}await invoke('save_settings',{settings:{...data.settings,scan_subfolders:data.settings.scan_subfolders||paths.some(path=>pathKey(path)===pathKey(data!.settings.library_dir)),source_dirs:sources}});await refresh();discoveryOpen=false;navigate({filter:'all',folder:'',selected:'',manageSources:false,legacy:false})})}
  function addSource(){if(busy||updating||!data)return;closeContext();sourcePaths=[];addingSource=true;importRecursive=true;importOpen=true}
  async function chooseSourceFolders(){await run(async()=>{const chosen=await open({directory:true,multiple:true,title:t('addSource')});if(chosen)sourcePaths=typeof chosen==='string'?[chosen]:chosen})}
  async function saveSourceFolders(){await run(async()=>{
@@ -242,6 +295,10 @@
    item('open',t('openFolder'),()=>void run(async()=>{await openFolder(modFolder(mod))}),{disabled:blocked});
    item('thumbnail',t('chooseThumbnail'),()=>void chooseThumbnail(mod),{disabled:blocked});
    item('tags',t('editTags'),()=>{selected=mod.id;requestAnimationFrame(()=>{const section=document.querySelector<HTMLDetailsElement>('.inspector-tags');if(section)section.open=true;const field=document.querySelector<HTMLInputElement>('.inspector .tag-form input');field?.focus();field?.scrollIntoView({block:'nearest'})})},{disabled:blocked});
+   if(mod.archive&&/\.(zip|7z|rar)$/i.test(mod.path)){
+    item('install',t('installArchive'),()=>void installSavedArchive(mod),{disabled:blocked,separator:true});
+    if(data?.settings.paks_dir)item('install-legacy',t('installAsLegacy'),()=>void installSavedArchive(mod,true),{disabled:blocked});
+   }
    if(!mod.archive){
     item('toggle',t(mod.enabled?'disableMod':'enableMod'),()=>void toggle(mod),{disabled:blocked,separator:true});
     if(['nexus','curseforge'].includes(modOrigin(mod).kind))item('check-update',t('checkModUpdate'),()=>void checkMods(mod),{disabled:blocked||checkingMods});
@@ -269,20 +326,29 @@
   return items;
  });
  function inGame(mod:Mod){return !!data&&(inside(mod.path,data.settings.mods_dir)||!!data.settings.paks_dir&&inside(mod.path,data.settings.paks_dir))}
- const filtered=$derived(sortLibrary(libraryMods.filter(m=>(filter==='all'||filter==='enabled'&&m.enabled||filter==='disabled'&&!m.enabled||filter==='updates'&&modChecks[m.id]?.status==='available')&&(!folder||(query.trim()||tagFilter?inside(m.path,folder):pathKey(normalizePath(m.path).split('/').slice(0,-1).join('/'))===pathKey(folder)||pathKey(m.path)===pathKey(folder)))&&(!tagFilter||(m.tags??[]).includes(tagFilter))&&`${m.name} ${m.author} ${m.project} ${m.path} ${(m.tags??[]).join(' ')} ${categoryLabel(categoryOf(m))}`.toLowerCase().includes(query.toLowerCase())),librarySort,modChecks,language.code));
+ const filtered=$derived(sortLibrary(libraryMods.filter(m=>(filter==='all'||filter==='enabled'&&m.enabled||filter==='disabled'&&!m.enabled||filter==='updates'&&modChecks[m.id]?.status==='available')&&(folder||legacyView===!!m.legacy)&&(!folder||(query.trim()||tagFilter?inside(m.path,folder):pathKey(normalizePath(m.path).split('/').slice(0,-1).join('/'))===pathKey(folder)||pathKey(m.path)===pathKey(folder)))&&(!tagFilter||(m.tags??[]).includes(tagFilter))&&`${m.name} ${m.author} ${m.project} ${m.path} ${(m.tags??[]).join(' ')} ${categoryLabel(categoryOf(m))}`.toLowerCase().includes(query.toLowerCase())),librarySort,modChecks,language.code));
  // Rendering, selection fallback and keyboard navigation all follow this one order.
  const groups=$derived(groupByCategory?groupMods(filtered,categoryOf,categoryLabel,language.code):[{category:{id:''} as ModCategory,mods:filtered}]);
  const ordered=$derived(groups.flatMap(group=>group.mods));
  const showGroups=$derived(groups.length>1);
- const errorMessage=$derived(errorText(error,['desktopRequired','nexusApiKeyRequired','nexusKeyLoadFailed','nexusKeySaveFailed','curseforgeKeyLoadFailed','curseforgeKeySaveFailed','curseforgeApiKeyRequired']));
+ const errorMessage=$derived(errorText(error,['desktopRequired','nexusApiKeyRequired','nexusKeyLoadFailed','nexusKeySaveFailed','curseforgeKeyLoadFailed','curseforgeKeySaveFailed','curseforgeApiKeyRequired','nxmHandlerMissing']));
  const active=$derived(ordered.find(m=>m.id===selected)??ordered[0]);
- async function run(action:()=>Promise<void>){if(busy||updating)return false;busy=true;error='';message='';try{await action();return true}catch(e){error=String(e);return false}finally{busy=false}}
+ async function run(action:()=>Promise<void>){if(busy||updating)return false;busy=true;error='';message='';messageParams={};try{await action();return true}catch(e){error=String(e);return false}finally{busy=false}}
  async function refresh(){data=await invoke<Snapshot>('snapshot')}
  async function add(){await run(async()=>{const p=await open({directory:true,multiple:false,title:t('chooseImportFolder')});if(p){addingSource=false;importPath=p;importRecursive=data?.settings.scan_subfolders??true;importOpen=true}})}
- async function importFolder(){await run(async()=>{await invoke('import_folder',{path:importPath,scanSubfolders:importRecursive});await refresh();message='folderImported';importOpen=false})}
- async function addZip(){await run(async()=>{const p=await open({multiple:false,filters:[{name:t('zipArchive'),extensions:['zip']}]});if(p){await invoke('import_zip',{path:p});await refresh();message='zipImported'}})}
+ async function importFolder(){await run(async()=>{const report=await invoke<InstallReport|null>('import_folder',{path:importPath,scanSubfolders:importRecursive});await refresh();importOpen=false;if(report?.legacy)revealInstall(report);else message='folderImported'})}
+ async function addZip(){await run(async()=>{const p=await open({multiple:false,filters:[{name:t('zipArchive'),extensions:['zip','7z','rar']}]});if(p){const report=await installArchive('import_zip',p);if(!report)return;await refresh();revealInstall(report)}})}
  function editMod(m:Mod){selected=m.id;editName=m.name;editDescription=m.description;editOpen=true}
- async function toggle(m:Mod){await run(async()=>{try{selected=await invoke<string>('set_mod_enabled',{id:m.id,enabled:!m.enabled})}finally{await refresh()}})}
+ async function toggle(m:Mod){
+  await run(async()=>{
+   const enabled=!m.enabled;
+   modToggle={name:m.name||m.project,enabled};
+   try{
+    try{selected=await invoke<string>('set_mod_enabled',{id:m.id,enabled})}
+    finally{await refresh()}
+   }finally{modToggle=null}
+  });
+ }
  async function remove(m:Mod){await run(async()=>{if(await confirm(t('removeConfirm',{name:m.name}),{title:t('removeTitle'),kind:'warning',okLabel:t('confirm'),cancelLabel:t('cancel')})){try{await invoke('remove_mod',{id:m.id})}finally{await refresh()}}})}
  async function checkAppUpdate(){
   try{return await check({timeout:20000})}
@@ -311,11 +377,28 @@
  function openNexusKeys(){void run(async()=>{await openUrl('https://www.nexusmods.com/settings/api-keys')})}
  async function receiveLink(raw:string){try{const info=await invoke<NexusInfo>('parse_nxm',{link:raw});downloadsOpen=false;showLink(info)}catch(e){error=String(e)}}
  onMount(()=>{locations=[location()];locationIndex=0;window.history.replaceState({inzoimm:historySession,index:0},'');if(!isTauri()){error='desktopRequired';return}
-  void loadNexusKey();void loadCurseforgeKey();void loadCheckLog();
+  void loadNexusKey();void loadCurseforgeKey();void loadCheckLog();void refreshNxmRegistration();
   refresh().then(()=>invoke<boolean>('init_paks_dir').then(changed=>changed?refresh():undefined).catch(()=>{})).catch(e=>error=String(e));void updates();const updateTimer=setInterval(()=>void updates(),60_000);invoke<{request_id:string;mod_id:number;file_id:number;url:string}[]>('pending_links').then(links=>{if(links.length){for(const info of links)showLink(info);}}).catch(e=>error=String(e));const progressUnlisten=listen<{request_id:string;received:number;total:number|null}>('nexus-download-progress',e=>{const job=jobs.find(j=>j.info.request_id===e.payload.request_id);if(job&&['downloading','cancelling'].includes(job.status))patchJob(e.payload.request_id,{received:e.payload.received,total:e.payload.total})});const unlisten=listen<{request_id:string;mod_id:number;file_id:number;url:string}>('nexus-link',e=>showLink(e.payload));getCurrent().then(urls=>{for(const u of urls??[])if(u.startsWith('nxm:'))void receiveLink(u)}).catch(e=>error=String(e));return()=>{clearInterval(updateTimer);void unlisten.then(f=>f());void progressUnlisten.then(f=>f())};
  });
  function focusDialog(node:HTMLElement){const previous=document.activeElement as HTMLElement|null;const controls=()=>Array.from(node.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),textarea:not(:disabled),select:not(:disabled),[tabindex="0"]')).filter(el=>el.offsetParent!==null);queueMicrotask(()=>(node.querySelector<HTMLElement>('[data-autofocus]:not(:disabled)')??controls()[0])?.focus());const trap=(e:KeyboardEvent)=>{if(e.key!=='Tab')return;const all=controls();if(!all.length){e.preventDefault();return}const first=all[0],last=all[all.length-1];if(e.shiftKey&&(document.activeElement===first||document.activeElement===node||!node.contains(document.activeElement))){e.preventDefault();last.focus()}else if(!e.shiftKey&&(document.activeElement===last||!node.contains(document.activeElement))){e.preventDefault();first.focus()}};node.addEventListener('keydown',trap);return{destroy(){node.removeEventListener('keydown',trap);if(previous?.isConnected)previous.focus()}};}
- function openSettings(){if(updating||onboardingOpen)return;closeDiscovery();metadataOpen=false;checkLogsOpen=false;draft=data?{...data.settings,scan_subfolders:data.settings.scan_subfolders??true}:null;editOpen=false;dismissLink();downloadsOpen=false;importOpen=false;settingsOpen=true;queueMicrotask(()=>document.querySelector<HTMLInputElement>('.modal input')?.focus());}
+ async function saveSettings(){
+  if(!draft)return;
+  const settings={...draft,staging_dir:draft.staging_dir?.trim()??'',paks_dir:draft.paks_dir??''};
+  await run(async()=>{
+   const previous=data?.settings;
+   stagingSaving=pathKey(settings.staging_dir)!==pathKey(previous?.staging_dir??'')
+    || (!settings.staging_dir&&pathKey(settings.mods_dir)!==pathKey(previous?.mods_dir??''));
+   try{await invoke('save_settings',{settings});await refresh();settingsOpen=false}
+   finally{stagingSaving=false}
+  });
+ }
+ async function chooseStagingFolder(){
+  await run(async()=>{
+   const folder=await open({directory:true,title:t('stagingLocation')});
+   if(folder&&draft)draft.staging_dir=folder;
+  });
+ }
+ function openSettings(){if(updating||onboardingOpen)return;closeDiscovery();metadataOpen=false;checkLogsOpen=false;draft=data?{...data.settings,scan_subfolders:data.settings.scan_subfolders??true}:null;editOpen=false;dismissLink();downloadsOpen=false;importOpen=false;settingsOpen=true;void refreshNxmRegistration();queueMicrotask(()=>document.querySelector<HTMLElement>('.settings-page select')?.focus());}
  function keyboard(e:KeyboardEvent){if(e.altKey&&['ArrowLeft','ArrowRight'].includes(e.key)){e.preventDefault();historyMove(e.key==='ArrowLeft'?-1:1);return}if(context)return;if((e.ctrlKey||e.metaKey)&&e.key===','){e.preventDefault();openSettings();return}if((e.ctrlKey||e.metaKey)&&e.key==='k'){e.preventDefault();if(!settingsOpen&&!editOpen&&!linkOpen&&!importOpen&&!downloadsOpen&&!checkLogsOpen&&!metadataOpen&&!discoveryOpen)input?.focus();return}if(e.key==='Escape'){closeDiscovery();settingsOpen=false;dismissLink();editOpen=false;importOpen=false;downloadsOpen=false;checkLogsOpen=false;metadataOpen=false}if(settingsOpen||editOpen||linkOpen||importOpen||downloadsOpen||checkLogsOpen||metadataOpen||discoveryOpen||sourcesView)return;if(e.target instanceof HTMLInputElement||e.target instanceof HTMLTextAreaElement||e.target instanceof HTMLSelectElement)return;if(['ArrowDown','ArrowUp',...(view==='grid'?['ArrowLeft','ArrowRight']:[])].includes(e.key)){
   e.preventDefault();const i=ordered.findIndex(m=>m.id===active?.id);
   const cards=Array.from(modItems?.querySelectorAll<HTMLButtonElement>('.mod-row')??[]);
@@ -332,30 +415,65 @@
   if(e.target instanceof HTMLElement&&e.target.closest('.mod-row'))cards[next]?.focus();
  }}
 </script>
-<svelte:window onkeydown={keyboard} onpopstate={historyPop} onmousedown={mouseNavigation} onmouseup={mouseNavigation} onauxclick={mouseNavigation}/>
+<svelte:window onkeydown={keyboard} onpopstate={historyPop} onmousedown={mouseNavigation} onmouseup={mouseNavigation} onauxclick={mouseNavigation} onfocus={refreshNxmRegistration}/>
 <div class="shell" use:contextTarget={{kind:'library'}}>
  <aside>
   <div class="aside-content">
   <div class="brand"><img src="/app-icon.png" alt=""/><div>inZOI<span>Better Mod Manager</span></div></div>
-  <button class:chosen={!sourcesView} onclick={()=>chooseFilter('all')}><IconBox size={18}/>{t('allMods')}<span class="all-mods-counts"><small>{libraryMods.length}</small>{#if modUpdateCount}<small class="mod-update-count" aria-label={t('modUpdatesFilter',{count:modUpdateCount})} title={t('modUpdatesFilter',{count:modUpdateCount})}>{modUpdateCount}</small>{/if}</span></button>
+  <button class:chosen={!sourcesView&&!legacyView&&!settingsOpen} onclick={()=>chooseFilter('all')}><IconBox size={18}/>{t('allMods')}<span class="all-mods-counts"><small>{libraryMods.length-legacyMods.length}</small>{#if modUpdateCount}<small class="mod-update-count" aria-label={t('modUpdatesFilter',{count:modUpdateCount})} title={t('modUpdatesFilter',{count:modUpdateCount})}>{modUpdateCount}</small>{/if}</span></button>
+  {#if showLegacyEntry}<button class="legacy-entry" class:chosen={!sourcesView&&legacyView&&!settingsOpen} onclick={openLegacy}><IconArchive size={18}/>{t('legacyPakMods')}{#if data?.mod_enabler===false&&legacyMods.length}<small class="legacy-warning" aria-label={t('modEnablerStatusMissing')} title={t('modEnablerStatusMissing')}>!</small>{/if}<small>{legacyMods.length}</small></button>{/if}
   <div class="aside-row">
    <button class="aside-row-main" title={modChecksDone?t('modCheckSummary',{count:modUpdateCount,failed:libraryMods.filter(m=>!!modCheckErrors[m.id]).length}):undefined} disabled={checkingMods||updating||!data||!nexusKeyReady||!curseforgeKeyReady} onclick={()=>checkMods()}><IconRefresh size={18} class={checkingMods?'spin':''}/><span class="aside-row-label">{t(checkingMods?'checkingModUpdates':'checkModUpdates')}</span>{#if modUpdateCount}<small>{modUpdateCount}</small>{/if}</button>
    <button class="icon check-log-link" aria-label={t('viewCheckLog')} title={t('viewCheckLog')} disabled={updating} onclick={openCheckLog}><IconHistory size={16}/></button>
   </div>
   </div>
-  <div class="aside-bottom"><button class="downloads-button" bind:this={downloadsButton} class:chosen={downloadsOpen} disabled={updating} onclick={openDownloads}><IconDownload size={18}/>{t('downloads')}{#if pendingCount}<small class="download-count">{pendingCount}</small>{:else if jobs.some(job=>job.status==='failed'||job.status==='importFailed')}<small class="download-count" aria-label={t('downloadFailed')}>!</small>{/if}</button><button disabled={updating} title="Ctrl ," onclick={openSettings}><IconSettings size={18}/>{t('settings')}{#if missingKeys&&nexusKeyReady&&curseforgeKeyReady}<small class="download-count key-badge" role="status" aria-label={t('keysMissingBadge',{count:missingKeys})} title={t('keysMissingBadge',{count:missingKeys})}>{missingKeys}</small>{/if}</button>
+  <div class="aside-bottom"><button class="downloads-button" bind:this={downloadsButton} class:chosen={downloadsOpen} disabled={updating} onclick={openDownloads}><IconDownload size={18}/>{t('downloads')}{#if pendingCount}<small class="download-count">{pendingCount}</small>{:else if jobs.some(job=>job.status==='failed'||job.status==='importFailed')}<small class="download-count" aria-label={t('downloadFailed')}>!</small>{/if}</button>
+   <button disabled={updating} title="Ctrl ," class:chosen={settingsOpen} aria-label={t('settings')} aria-describedby={settingsCount?'settings-count':undefined} aria-current={settingsOpen?'page':undefined} onclick={openSettings}>
+    <IconSettings size={18}/>{t('settings')}{#if settingsCount}<small id="settings-count" class="settings-count" role="status" aria-label={settingsAttention} title={settingsAttention}>{settingsCount}</small>{/if}
+   </button>
    <div class="aside-meta"><button class="app-update-button" aria-label={t('appUpdates')} title={`${t('appUpdates')}: ${t(updateStatus,{version:availableVersion})}`} onclick={appUpdateClick} disabled={busy||updating||checkingApp||processing||pendingCount>0}><IconRefresh size={13} class={checkingApp?'spin':''}/><span class="update-status" class:sr-only={updateStatus==='upToDate'||updateStatus==='checkingUpdates'}>{t(updateStatus,{version:availableVersion})}</span></button><AppInfo/></div></div>
  </aside>
- <main>
-  <header><div class="navigation-buttons" role="group" aria-label={t('navigation')}><button class="icon" title={t('back')} aria-label={t('back')} disabled={!canBack||updating} onclick={()=>historyMove(-1)}><IconArrowLeft size={18}/></button><button class="icon" title={t('forward')} aria-label={t('forward')} disabled={!canForward||updating} onclick={()=>historyMove(1)}><IconArrowRight size={18}/></button></div><div class="search"><IconSearch size={20}/><input bind:this={input} title="Ctrl K" value={sourcesView?sourceQuery:query} oninput={e=>{if(sourcesView)sourceQuery=e.currentTarget.value;else query=e.currentTarget.value}} placeholder={t(sourcesView?'searchSources':'searchPlaceholder')} aria-label={t(sourcesView?'searchSources':'search')}/>{#if sourcesView&&sourceQuery}<button class="icon" aria-label={t('clearSourceSearch')} onclick={()=>sourceQuery=''}><IconX size={15}/></button>{/if}</div><button class="icon" title={t('refresh')} disabled={busy||updating} onclick={()=>void run(refresh)}><IconRefresh size={18} class={busy?'spin':''}/></button></header>
-  <div class="page-title managed-title"><div class="library-heading"><h1 title={sourcesView?t('sourceFolders'):folder?currentFolder?.name??folderName(folder):t('yourLibrary')}>{sourcesView?t('sourceFolders'):folder?currentFolder?.name??folderName(folder):t('yourLibrary')}</h1><p>{sourcesView?t('sourceCount',{count:managedRoots.length}):t('folderModCount',{count:filtered.length})}</p>{#if !sourcesView}<button class="icon library-help" aria-label={t('managedCollectionHint')}><IconInfoCircle size={16}/><span class="library-help-tooltip" aria-hidden="true">{t('managedCollectionHint')}</span></button>{/if}</div><div class="actions"><button class="icon" aria-label={t('scanComputer')} title={t('scanComputer')} disabled={busy||updating||!data} onclick={openDiscovery}><IconZoomScan size={17}/></button>{#if sourcesView}<button class="primary" disabled={busy||updating||!data} onclick={addSource}><IconPlus size={17}/>{t('addSource')}</button>{:else}<button class="icon" aria-label={t('importZip')} title={t('importZip')} disabled={busy||updating||!data} onclick={addZip}><IconFileZip size={17}/></button><button class="primary" disabled={busy||updating||!data} onclick={add}><IconPlus size={17}/>{t('addMod')}</button>{/if}</div></div>
+ <main class:settings-main={settingsOpen}>
+  {#if settingsOpen}<section class="settings-page" aria-label={t('settings')}>
+  <div class="settings-head"><button class="icon" aria-label={t('backToLibrary')} title={t('backToLibrary')} onclick={()=>settingsOpen=false}><IconArrowLeft size={18}/></button><div class="settings-title"><h1>{t('librarySettings')}</h1><p>{t('settingsHint')}</p></div><button class="primary" disabled={busy||updating||!draft} onclick={()=>void saveSettings()}>{t('saveSettings')}</button></div>
+  {#if error}<div class="notice error" role="alert">{t('operationFailed')}: {errorMessage}<button class="icon" onclick={()=>error=''} aria-label={t('closeError')}><IconX size={16}/></button></div>{/if}
+  {#if message}<div class="notice" role="status">{t(message as TranslationKey,{version:update?.version??'',...messageParams})}</div>{/if}
+  <div class="settings-body">
+   <div class="settings-column">{#if draft}<section class="settings-card" aria-labelledby="settings-folders"><h2 id="settings-folders">{t('settingsFolders')}</h2>{#each [{key:'mods_dir' as FolderKey,name:t('gameModsFolder')},{key:'library_dir' as FolderKey,name:t('libraryFolder')}] as f}<label>{f.name}<div class="path-input"><input id={f.key} bind:value={draft[f.key]}/><button title={t('chooseFolder')} onclick={()=>void run(async()=>{const p=await open({directory:true});if(p&&draft)draft[f.key]=f.key==='paks_dir'?(await invoke<string|null>('detect_paks_dir',{picked:p}))??p:p})}><IconFolder size={18}/></button>{#if f.key==='paks_dir'}<button title={t('detectPaks')} aria-label={t('detectPaks')} onclick={()=>void run(async()=>{const p=await invoke<string|null>('detect_paks_dir',{});if(p&&draft)draft.paks_dir=p;else message='pakNotFound'})}><IconSearch size={18}/></button>{/if}</div></label>{#if f.key==='paks_dir'}<p class="muted">{t('pakModsHint')}</p>{#if data?.mod_enabler!=null&&draft.paks_dir===data.settings.paks_dir}<div class="mod-enabler-status"><span class:ok={data.mod_enabler}>{t(data.mod_enabler?'modEnablerStatusOk':'modEnablerStatusMissing')}</span>{#if data.game_dir}<button onclick={()=>void run(async()=>{await openFolder(data!.game_dir!)})}>{t('openGameFolder')}</button>{/if}<button onclick={()=>void openEnablerPage()}>{t('downloadModEnabler')}</button><button disabled={busy||updating} onclick={()=>void chooseModEnabler()}>{t('installModEnabler')}</button></div>{/if}{/if}{#if f.key==='library_dir'}<label class="checkbox-option"><input type="checkbox" bind:checked={draft.scan_subfolders}/><span>{t('scanSubfolders')}</span></label><p class="muted scan-hint">{t('managedFolderHint')}</p>{/if}{/each}<label>{t('downloadFolder')}<div class="path-input"><input id="downloads_dir" bind:value={draft.downloads_dir} placeholder={downloadFolder({...draft,downloads_dir:''})}/><button title={t('chooseDownloadFolder')} onclick={()=>void run(async()=>{const p=await open({directory:true,title:t('downloadFolder')});if(p&&draft)draft.downloads_dir=p})}><IconFolder size={18}/></button></div></label><p class="muted">{t('downloadFolderHint')}</p>  <label for="staging_dir">{t('stagingLocation')}</label>
+    <div class="path-input">
+     <input id="staging_dir" aria-describedby="staging-location-hint" bind:value={draft.staging_dir} placeholder={draft.mods_dir.replace(/[\\/]+$/,'').replace(/[^\\/]+$/,'')} disabled={busy||updating}/>
+     <button title={t('chooseFolder')} aria-label={t('stagingLocation')} disabled={busy||updating} onclick={()=>void chooseStagingFolder()}><IconFolder size={18}/></button>
+    </div>
+    <p id="staging-location-hint" class="muted">{t('stagingLocationHint')}</p>
+   </section><section class="settings-card" aria-labelledby="settings-legacy"><h2 id="settings-legacy">{t('legacyPakMods')}</h2>{#each [{key:'paks_dir' as FolderKey,name:t('pakModsFolder')}] as f}<label>{f.name}<div class="path-input"><input id={f.key} bind:value={draft[f.key]}/><button title={t('chooseFolder')} onclick={()=>void run(async()=>{const p=await open({directory:true});if(p&&draft)draft[f.key]=f.key==='paks_dir'?(await invoke<string|null>('detect_paks_dir',{picked:p}))??p:p})}><IconFolder size={18}/></button>{#if f.key==='paks_dir'}<button title={t('detectPaks')} aria-label={t('detectPaks')} onclick={()=>void run(async()=>{const p=await invoke<string|null>('detect_paks_dir',{});if(p&&draft)draft.paks_dir=p;else message='pakNotFound'})}><IconSearch size={18}/></button>{/if}</div></label>{#if f.key==='paks_dir'}<p class="muted">{t('pakModsHint')}</p>{#if data?.mod_enabler!=null&&draft.paks_dir===data.settings.paks_dir}<div class="mod-enabler-status"><span class:ok={data.mod_enabler}>{t(data.mod_enabler?'modEnablerStatusOk':'modEnablerStatusMissing')}</span>{#if data.game_dir}<button onclick={()=>void run(async()=>{await openFolder(data!.game_dir!)})}>{t('openGameFolder')}</button>{/if}<button onclick={()=>void openEnablerPage()}>{t('downloadModEnabler')}</button><button disabled={busy||updating} onclick={()=>void chooseModEnabler()}>{t('installModEnabler')}</button></div>{/if}{/if}{#if f.key==='library_dir'}<label class="checkbox-option"><input type="checkbox" bind:checked={draft.scan_subfolders}/><span>{t('scanSubfolders')}</span></label><p class="muted scan-hint">{t('managedFolderHint')}</p>{/if}{/each}</section>{/if}</div>
+   <div class="settings-column">
+    <section class="settings-card" aria-labelledby="settings-general">
+     <h2 id="settings-general">{t('settingsGeneral')}</h2>
+     <label>{t('language')}<select value={language.code} onchange={e=>setLanguage(e.currentTarget.value)}>{#each languages as option}<option value={option.code}>{option.name}</option>{/each}</select></label>
+     <p class="muted">{t('languageHint')}</p>
+     <div class="nxm-setting">
+      <p class="nxm-status" class:active={nxmRegistered===true} class:missing={nxmRegistered===false} id="nxm-status" role="status">
+       {t(nxmRegistered===true?'nxmHandlerActive':nxmRegistered===false?'nxmHandlerMissing':'nxmHandlerUnknown')}
+      </p>
+      <button class="wide" aria-describedby="nxm-status" disabled={busy||updating} onclick={registerNxm}>{t('setNxmHandler')}</button>
+     </div>
+     <p class="muted">{t('updateHint')}</p>
+    </section>
+    <section class="settings-card" aria-labelledby="settings-accounts"><h2 id="settings-accounts">{t('settingsAccounts')}</h2><NexusApiKey bind:value={nexusKey} disabled={busy||updating||!nexusKeyReady} saving={nexusKeySaving} onopen={openNexusKeys} onchange={changeNexusKey}/><NexusApiKey provider="curseforge" bind:value={curseforgeKey} disabled={busy||updating||!curseforgeKeyReady} saving={curseforgeKeySaving} onopen={()=>void run(async()=>{await openUrl(CURSEFORGE_KEYS_URL)})} onchange={changeCurseforgeKey}/></section>
+   </div>
+  </div>
+ </section>{:else}
+  <header><div class="navigation-buttons" role="group" aria-label={t('navigation')}><button class="icon" title={t('back')} aria-label={t('back')} disabled={!canBack||updating} onclick={()=>historyMove(-1)}><IconArrowLeft size={18}/></button><button class="icon" title={t('forward')} aria-label={t('forward')} disabled={!canForward||updating} onclick={()=>historyMove(1)}><IconArrowRight size={18}/></button></div><div class="search"><IconSearch size={20}/><input bind:this={input} title="Ctrl K" value={sourcesView?sourceQuery:query} oninput={e=>{if(sourcesView)sourceQuery=e.currentTarget.value;else query=e.currentTarget.value}} placeholder={t(sourcesView?'searchSources':'searchPlaceholder')} aria-label={t(sourcesView?'searchSources':'search')}/>{#if sourcesView&&sourceQuery}<button class="icon" aria-label={t('clearSourceSearch')} onclick={()=>sourceQuery=''}><IconX size={15}/></button>{/if}</div><button class="icon" title={t('refresh')} disabled={busy||updating} onclick={()=>void run(refresh)}><IconRefresh size={18} class={busy&&!operationLabel?'spin':''}/></button></header>
+  <div class="page-title managed-title"><div class="library-heading"><h1 title={sourcesView?t('sourceFolders'):folder?currentFolder?.name??folderName(folder):legacyView?t('legacyPakMods'):t('yourLibrary')}>{sourcesView?t('sourceFolders'):folder?currentFolder?.name??folderName(folder):legacyView?t('legacyPakMods'):t('yourLibrary')}</h1><p>{sourcesView?t('sourceCount',{count:managedRoots.length}):t('folderModCount',{count:filtered.length})}</p>{#if !sourcesView}<button class="icon library-help" aria-label={t('managedCollectionHint')}><IconInfoCircle size={16}/><span class="library-help-tooltip" aria-hidden="true">{t('managedCollectionHint')}</span></button>{/if}</div><div class="actions"><button class="icon" aria-label={t('scanComputer')} title={t('scanComputer')} disabled={busy||updating||!data} onclick={openDiscovery}><IconZoomScan size={17}/></button>{#if sourcesView}<button class="primary" disabled={busy||updating||!data} onclick={addSource}><IconPlus size={17}/>{t('addSource')}</button>{:else}<button class="icon" aria-label={t('importZip')} title={t('importZip')} disabled={busy||updating||!data} onclick={addZip}><IconFileZip size={17}/></button><button class="primary" disabled={busy||updating||!data} onclick={add}><IconPlus size={17}/>{t('addMod')}</button>{/if}</div></div>
   {#if modChecksDone&&libraryMods.some(m=>!!modCheckErrors[m.id])}<div class="notice error check-log-notice"><span>{t('checkLogFailedCount',{count:libraryMods.filter(m=>!!modCheckErrors[m.id]).length})}</span><button onclick={openCheckLog}>{t('viewCheckLog')}</button></div>{/if}
   {#if updatePrompt&&availableVersion&&!appUpdateError}<div class="notice app-update-notice" role="status" aria-label={t('appUpdates')}><span><strong>{t('newVersion',{version:availableVersion})}</strong><small>{t('appUpdateRestartHint')}</small></span><button disabled={busy||updating||checkingApp||processing||pendingCount>0} onclick={()=>void installAppUpdate()}>{t('installUpdate')}</button><button onclick={()=>updatePrompt=false}>{t('updateLater')}</button></div>{/if}
   {#if appUpdateError}<div class="notice app-update-notice" role="status" aria-label={t('appUpdates')}><span><strong>{t(updateStatus)}</strong><small>{t('appUpdateLibraryAvailable')}</small><small class="app-update-detail">{appUpdateError}</small></span><button disabled={busy||updating||checkingApp||processing||pendingCount>0} onclick={()=>void (installFailed?installAppUpdate():updates())}>{t('retryAppUpdate')}</button><button class="icon" aria-label={t('close')} onclick={()=>appUpdateError=''}><IconX size={16}/></button></div>{/if}
   {#if error}<div class="notice error" role="alert">{t('operationFailed')}: {errorMessage}<button class="icon" onclick={()=>error=''} aria-label={t('closeError')}><IconX size={16}/></button></div>{/if}
-  {#if message}<div class="notice" role="status">{t(message as TranslationKey,{version:update?.version??''})}</div>{/if}
+  {#if message}<div class="notice" role="status">{t(message as TranslationKey,{version:update?.version??'',...messageParams})}</div>{/if}
+  {#if data?.mod_enabler===false&&!enablerNoticeHidden&&!legacyView&&legacyMods.length}<div class="notice mod-enabler-notice" role="status"><span>{t('modEnablerMissingNotice')}</span><button onclick={()=>void openEnablerPage()}>{t('downloadModEnabler')}</button><button disabled={busy||updating} onclick={()=>void chooseModEnabler()}>{t('installModEnabler')}</button><button class="icon" aria-label={t('close')} onclick={()=>enablerNoticeHidden=true}><IconX size={16}/></button></div>{/if}
   {#if updating&&update}<div class="notice" role="status">{t('applyingUpdate')}</div>{/if}
   {#if data?.warnings.length}<details class="warnings"><summary>{t('scanWarnings',{count:data.warnings.length})}</summary>{#each data.warnings as warning}<p>{warning}</p>{/each}</details>{/if}
+  {#if legacyView&&!sourcesView&&!folder}<section class="legacy-panel" aria-label={t('modEnablerTitle')}><div><strong class:ok={data?.mod_enabler===true} class:missing={data?.mod_enabler===false}>{t(data?.mod_enabler===true?'modEnablerStatusOk':data?.mod_enabler===false?'modEnablerStatusMissing':'modEnablerNoFolder')}</strong><p>{t('legacyPanelHint')}</p></div><div class="legacy-panel-actions">{#if data?.game_dir}<button disabled={busy||updating} onclick={()=>void run(async()=>{await openFolder(data!.game_dir!)})}><IconFolder size={15}/>{t('openGameFolder')}</button>{/if}<button onclick={()=>void openEnablerPage()}><IconArrowUpRight size={15}/>{t('downloadModEnabler')}</button>{#if data?.mod_enabler==null}<button onclick={openSettings}><IconSettings size={15}/>{t('settings')}</button>{:else}<button disabled={busy||updating} onclick={()=>void chooseModEnabler()}>{t('installModEnabler')}</button>{/if}</div></section>{/if}
   <div class="managed-tabs" role="tablist" tabindex="-1" aria-label={t('library')} onkeydown={managedTabKeys}><button id="managed-mods-tab" role="tab" aria-selected={!manageSources} aria-controls="managed-mods-panel" tabindex={manageSources?-1:0} onclick={()=>navigate({manageSources:false})}>{t('modsTab')}</button><button id="managed-sources-tab" role="tab" aria-selected={manageSources} aria-controls="managed-sources-panel" tabindex={manageSources?0:-1} onclick={()=>navigate({manageSources:true,folder:''})}>{t('sourceFolders')}<span>{managedRoots.length}</span></button></div>
   {#if sourcesView}<div class="sources-workspace" id="managed-sources-panel" role="tabpanel" aria-labelledby="managed-sources-tab"><SourceManager sources={sourceRows} search={sourceQuery} disabled={busy||updating} contextAction={contextTarget} onbrowse={browse} onopen={path=>void run(async()=>{await openFolder(path)})} onremove={path=>void removeSource(path)} onscan={changeSourceScan}/></div>{:else}
   <div class="workspace" id="managed-mods-panel" role="tabpanel" aria-labelledby="managed-mods-tab">
@@ -391,7 +509,7 @@
   {/each}
   {/each}
   </div>
-  {#if !data&&!error}<div class="empty" role="status"><IconRefresh size={30} stroke={1.5} class="spin"/><h2>{t('loadingLibrary')}</h2><p>{t('loadingLibraryHint')}</p></div>{:else if filtered.length===0&&(!childFolders.length||query.trim()||tagFilter)}<div class="empty"><IconBox size={42} stroke={1}/><h2>{query?t('noResults'):t('emptyTitle')}</h2><p>{query?t('noResultsHint'):t('emptyHint')}</p>{#if !query}<button onclick={add} disabled={!data||busy}>{t('chooseModFolder')} <IconArrowUpRight size={16}/></button>{/if}</div>{/if}
+  {#if !data&&!error}<div class="empty" role="status"><IconRefresh size={30} stroke={1.5} class="spin"/><h2>{t('loadingLibrary')}</h2><p>{t('loadingLibraryHint')}</p></div>{:else if filtered.length===0&&(!childFolders.length||query.trim()||tagFilter)}<div class="empty"><IconBox size={42} stroke={1}/><h2>{query?t('noResults'):legacyView&&!folder?t('legacyEmptyTitle'):t('emptyTitle')}</h2><p>{query?t('noResultsHint'):legacyView&&!folder?t('legacyEmptyHint'):t('emptyHint')}</p>{#if !query&&legacyView&&!folder}<button onclick={addZip} disabled={!data||busy}>{t('importZip')} <IconArrowUpRight size={16}/></button>{:else if !query}<button onclick={add} disabled={!data||busy}>{t('chooseModFolder')} <IconArrowUpRight size={16}/></button>{/if}</div>{/if}
   </section>
   <ResizableInspector>
    <section class="inspector" id="mod-inspector" use:contextTarget={active?{kind:'mod',id:active.id}:{kind:'library'}} aria-label={t('modDetails')}>
@@ -433,7 +551,7 @@
      {/key}
      <div class="inspector-actions">
       {#if active.archive}
-       {#if active.path.toLowerCase().endsWith('.zip')}<button class="wide" disabled={busy||updating} onclick={()=>void run(async()=>{await invoke('import_download',{path:active!.path});await refresh()})}>{t('retryImport')}</button>{/if}
+       {#if /\.(zip|7z|rar)$/i.test(active.path)}<button class="wide primary" disabled={busy||updating} onclick={()=>void installSavedArchive(active!)}><IconDownload size={16}/>{t('installArchive')}</button>{#if data?.settings.paks_dir}<button class="wide" title={t('installAsLegacyHint')} disabled={busy||updating} onclick={()=>void installSavedArchive(active!,true)}><IconArchive size={16}/>{t('installAsLegacy')}</button>{/if}{/if}
        <button class="wide danger" disabled={busy||updating} onclick={()=>remove(active!)}><IconTrash size={16}/>{t('remove')}</button>
       {:else}
        <button class="wide primary" disabled={busy||updating} onclick={()=>toggle(active!)}>{active.enabled?t('disableMod'):t('enableMod')}</button>
@@ -445,13 +563,19 @@
    </section>
   </ResizableInspector></div>
   {/if}
-  <footer><span><span class="game-dot" class:busy={busy||updating}></span>{updating?t('applyingUpdate'):busy?t('working'):t('localLibrary')}</span></footer>
+  {/if}
+  <footer class="library-status">
+   <span class="library-status-text">
+    <span class="game-dot" class:busy={updating||busy&&(!operationLabel||operationVisible)} aria-hidden="true"></span>
+    <span class="library-status-label" title={operationVisible?operationLabel:undefined}>{updating?t('applyingUpdate'):operationVisible&&operationLabel?operationLabel:busy&&!operationLabel?t('working'):t('localLibrary')}</span>
+   </span>
+   <span class="sr-only" role="status">{operationVisible?operationLabel:''}</span>
+   <div class="mod-operation" class:visible={operationVisible} role="progressbar" aria-label={operationLabel||undefined} aria-hidden={!operationVisible}></div>
+  </footer>
  </main>
 </div>
-{#if settingsOpen||editOpen||linkOpen||importOpen}<div class="overlay"><div class="modal" use:focusDialog role="dialog" aria-modal="true" aria-label={settingsOpen?t('settings'):editOpen?t('editMod'):importOpen?t(addingSource?'addSource':'importFolder'):t(nexus?.provider==='curseforge'?'confirmCurseforgeDownload':'confirmNexusDownload')} tabindex="-1"><div class="modal-head"><h2>{settingsOpen?t('librarySettings'):editOpen?t('editMod'):importOpen?t(addingSource?'addSource':'importFolder'):t(nexus?.provider==='curseforge'?'confirmCurseforgeDownload':'confirmNexusDownload')}</h2><button class="icon" onclick={()=>{settingsOpen=false;editOpen=false;dismissLink();importOpen=false}} aria-label={t('close')}><IconX size={20}/></button></div>
- {#if settingsOpen}<label>{t('language')}<select value={language.code} onchange={e=>setLanguage(e.currentTarget.value)}>{#each languages as option}<option value={option.code}>{option.name}</option>{/each}</select></label><p class="muted">{t('languageHint')}</p><NexusApiKey bind:value={nexusKey} disabled={busy||updating||!nexusKeyReady} saving={nexusKeySaving} onopen={openNexusKeys} onchange={changeNexusKey}/><NexusApiKey provider="curseforge" bind:value={curseforgeKey} disabled={busy||updating||!curseforgeKeyReady} saving={curseforgeKeySaving} onopen={()=>void run(async()=>{await openUrl(CURSEFORGE_KEYS_URL)})} onchange={changeCurseforgeKey}/>{/if}
- {#if settingsOpen&&draft}<p class="muted">{t('settingsHint')}</p>{#each [{key:'mods_dir' as const,name:t('gameModsFolder')},{key:'library_dir' as const,name:t('libraryFolder')},{key:'paks_dir' as const,name:t('pakModsFolder')}] as f}<label>{f.name}<div class="path-input"><input id={f.key} bind:value={draft[f.key]}/><button title={t('chooseFolder')} onclick={()=>void run(async()=>{const p=await open({directory:true});if(p&&draft)draft[f.key]=f.key==='paks_dir'?(await invoke<string|null>('detect_paks_dir',{picked:p}))??p:p})}><IconFolder size={18}/></button>{#if f.key==='paks_dir'}<button title={t('detectPaks')} aria-label={t('detectPaks')} onclick={()=>void run(async()=>{const p=await invoke<string|null>('detect_paks_dir',{});if(p&&draft)draft.paks_dir=p;else message='pakNotFound'})}><IconSearch size={18}/></button>{/if}</div></label>{#if f.key==='paks_dir'}<p class="muted">{t('pakModsHint')}</p>{/if}{#if f.key==='library_dir'}<label class="checkbox-option"><input type="checkbox" bind:checked={draft.scan_subfolders}/><span>{t('scanSubfolders')}</span></label><p class="muted scan-hint">{t('managedFolderHint')}</p>{/if}{/each}<label>{t('downloadFolder')}<div class="path-input"><input id="downloads_dir" bind:value={draft.downloads_dir} placeholder={downloadFolder({...draft,downloads_dir:''})}/><button title={t('chooseDownloadFolder')} onclick={()=>void run(async()=>{const p=await open({directory:true,title:t('downloadFolder')});if(p&&draft)draft.downloads_dir=p})}><IconFolder size={18}/></button></div></label><p class="muted">{t('downloadFolderHint')}</p><p class="muted">{t('updateHint')}</p><button class="wide" onclick={()=>void run(async()=>{if(await confirm(t('nxmConfirm'),{title:t('nxmTitle'),okLabel:t('confirm'),cancelLabel:t('cancel')})){await invoke('register_nxm');message='nxmRegistered'}})}>{t('setNxmHandler')}</button><button class="primary wide" disabled={busy||updating} onclick={()=>void run(async()=>{await invoke('save_settings',{settings:{...draft!,paks_dir:draft?.paks_dir??''}});await refresh();settingsOpen=false})}>{t('saveSettings')}</button>
- {:else if importOpen}{#if addingSource}<div class="scan-choice"><label class="checkbox-option"><input type="checkbox" bind:checked={importRecursive}/><span>{t('scanSubfolders')}</span></label><p class="muted scan-hint">{t('scanSubfoldersHint')}</p></div><button class="wide" disabled={busy||updating} onclick={chooseSourceFolders}><IconFolder size={17}/>{t('chooseFolder')}</button>{#each sourcePaths as path}<p class="import-path">{path}</p>{/each}{:else}<p class="import-path">{importPath}</p><label class="checkbox-option"><input type="checkbox" bind:checked={importRecursive}/><span>{t('scanSubfolders')}</span></label><p class="muted scan-hint">{t('scanSubfoldersHint')}</p>{/if}<div class="actions"><button disabled={busy||updating} onclick={()=>importOpen=false}>{t('cancel')}</button><button class="primary" disabled={busy||updating||(addingSource&&!sourcePaths.length)} onclick={addingSource?saveSourceFolders:importFolder}>{t(addingSource?'addSource':'importFolder')}</button></div>
+{#if editOpen||linkOpen||importOpen}<div class="overlay"><div class="modal" use:focusDialog role="dialog" aria-modal="true" aria-label={editOpen?t('editMod'):importOpen?t(addingSource?'addSource':'importFolder'):t(nexus?.provider==='curseforge'?'confirmCurseforgeDownload':'confirmNexusDownload')} tabindex="-1"><div class="modal-head"><h2>{editOpen?t('editMod'):importOpen?t(addingSource?'addSource':'importFolder'):t(nexus?.provider==='curseforge'?'confirmCurseforgeDownload':'confirmNexusDownload')}</h2><button class="icon" onclick={()=>{editOpen=false;dismissLink();importOpen=false}} aria-label={t('close')}><IconX size={20}/></button></div>
+ {#if importOpen}{#if addingSource}<div class="scan-choice"><label class="checkbox-option"><input type="checkbox" bind:checked={importRecursive}/><span>{t('scanSubfolders')}</span></label><p class="muted scan-hint">{t('scanSubfoldersHint')}</p></div><button class="wide" disabled={busy||updating} onclick={chooseSourceFolders}><IconFolder size={17}/>{t('chooseFolder')}</button>{#each sourcePaths as path}<p class="import-path">{path}</p>{/each}{:else}<p class="import-path">{importPath}</p><label class="checkbox-option"><input type="checkbox" bind:checked={importRecursive}/><span>{t('scanSubfolders')}</span></label><p class="muted scan-hint">{t('scanSubfoldersHint')}</p>{/if}<div class="actions"><button disabled={busy||updating} onclick={()=>importOpen=false}>{t('cancel')}</button><button class="primary" disabled={busy||updating||(addingSource&&!sourcePaths.length)} onclick={addingSource?saveSourceFolders:importFolder}>{t(addingSource?'addSource':'importFolder')}</button></div>
  {:else if editOpen}<label>{t('modName')}<input bind:value={editName}/></label><label>{t('description')}<textarea bind:value={editDescription} rows="5"></textarea></label><button class="primary wide" disabled={busy||updating} onclick={()=>void run(async()=>{await invoke('edit_mod',{id:active!.id,name:editName,description:editDescription});await refresh();editOpen=false})}>{t('saveChanges')}</button>
  {:else if linkOpen&&nexus}<div class="download-confirm" bind:this={downloadConfirmation}><IconDownload size={28} stroke={1.5}/><p class="link-info">{downloadLabel(nexus)}</p><p>{t(nexus.provider==='curseforge'?'curseforgeDownloadHint':'downloadConfirmHint')}</p><p class="download-confirm-path" title={downloadFolder(data?.settings)}>{downloadFolder(data?.settings)}</p></div>{#if promptKey&&nexus.provider==='curseforge'}<NexusApiKey provider="curseforge" bind:value={curseforgeKey} disabled={updating||!curseforgeKeyReady} saving={curseforgeKeySaving} onopen={()=>void run(async()=>{await openUrl(CURSEFORGE_KEYS_URL)})} onchange={changeCurseforgeKey}/>{:else if promptKey}<NexusApiKey bind:value={nexusKey} disabled={updating||!nexusKeyReady} saving={nexusKeySaving} onopen={openNexusKeys} onchange={changeNexusKey}/>{/if}<div class="actions"><button onclick={dismissLink}>{t('cancel')}</button><button class="primary" data-autofocus disabled={updating||!keyReady(nexus)||(nexus.provider==='curseforge'?curseforgeKeySaving:nexusKeySaving)||!keyFor(nexus).trim()} onclick={confirmDownload}>{t('ok')}</button></div>{/if}
 

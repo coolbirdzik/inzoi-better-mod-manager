@@ -41,7 +41,7 @@ Dev server dùng `http://127.0.0.1:1430`, tách khỏi cổng Tauri mặc địn
 
 Dự án chưa có bản phát hành ổn định. Không xem các mục định hướng là chức năng đã được kiểm thử đầy đủ. Đăng ký giao thức `nxm` chỉ thực hiện khi người dùng chọn trong cài đặt vì nó thay ứng dụng mặc định nhận liên kết Vortex/Nexus.
 
-Bản cài lưu dữ liệu trong app-data riêng; bản portable lưu trong thư mục `data` cạnh file chạy. Quét thư mục chỉ đọc; bật/tắt hoặc xoá mới thay đổi file của mod được chọn. Gỡ mod trong thư viện chuyển vào `.trash` để giữ khả năng phục hồi. Bản sao mod tắt được giữ trong `.inzoimm-disabled` bên cạnh thư mục Mods trên cùng ổ đĩa.
+Bản cài lưu dữ liệu trong app-data riêng; bản portable lưu trong thư mục `data` cạnh file chạy. Quét thư mục chỉ đọc; bật/tắt hoặc xoá mới thay đổi file của mod được chọn. Xoá mod chuyển file vào Thùng rác của hệ điều hành. Bản sao mod tắt được giữ trong `.inzoimm-disabled` bên cạnh thư mục Mods trên cùng ổ đĩa.
 
 ## Phát hành
 
@@ -49,9 +49,9 @@ Repository: [coolbirdzik/inzoi-better-mod-manager](https://github.com/coolbirdzi
 
 ## Tiến độ hiện tại
 
-Đã triển khai: quét mod theo `mod_manifest.json`, thumbnail cục bộ nếu có, tìm kiếm/lọc, nhập thư mục hoặc ZIP vào thư viện riêng, tiếp nhận mod đã cài sau khi sao lưu, sửa tên/mô tả, bật/tắt bằng bản sao có đánh dấu quyền sở hữu, gỡ vào thư mục phục hồi, đọc và đăng ký liên kết NXM cho inZOI, tự tải/cài bản cập nhật đã ký rồi khởi động lại.
+Đã triển khai: quét mod theo `mod_manifest.json`, thumbnail cục bộ nếu có, tìm kiếm/lọc, nhập thư mục hoặc ZIP vào thư viện riêng, tiếp nhận mod đã cài sau khi sao lưu, sửa tên/mô tả, bật/tắt bằng bản sao có đánh dấu quyền sở hữu, gỡ vào Thùng rác của hệ điều hành, đọc và đăng ký liên kết NXM cho inZOI, tự tải/cài bản cập nhật đã ký rồi khởi động lại.
 
-Chưa hoàn tất: cài đặt tự động nội dung 7z/RAR, legacy PAK/UE4SS, nhập dữ liệu Vortex cũ, kiểm thử toàn bộ luồng thao tác trên app thật và kiểm tra giao diện macOS trực tiếp. Mod có sẵn trong game được bật/tắt và xoá trực tiếp; app tự lưu bản sao trong Managed mods folder trước khi quản lý. Xoá dùng được khi mod đang bật, đưa file thư viện vào `.trash` và bản triển khai vào thư mục phục hồi; lỗi lưu cấu hình sẽ hoàn tác thay đổi. Liên kết NXM được tiếp nhận ở cả lần mở app đầu tiên và khi app đã chạy.
+Chưa hoàn tất: gói UE4SS/LogicMods, RAR/7z nhiều phần hoặc có mật khẩu, nhập dữ liệu Vortex cũ, kiểm thử toàn bộ luồng thao tác trên app thật và kiểm tra giao diện macOS trực tiếp. Mod có sẵn trong game được bật/tắt và xoá trực tiếp; app tự lưu bản sao trong Managed mods folder trước khi quản lý. Xoá mod đang bật đưa cả bản thư viện và bản triển khai do app quản lý vào Thùng rác của hệ điều hành. Liên kết NXM được tiếp nhận ở cả lần mở app đầu tiên và khi app đã chạy.
 
 Khóa ký cập nhật được tạo cục bộ ngoài repository. Để phát hành từ GitHub Actions, thêm private key vào secret `TAURI_SIGNING_PRIVATE_KEY`; không commit private key. Public key được cấu hình trong `src-tauri/tauri.conf.json`. Workflow tạo bản nháp; bước xác minh tự động chỉ công bố khi đủ gói và tất cả chữ ký hợp lệ.
 
@@ -76,7 +76,7 @@ Trong **Downloads**, có thể xem tiến độ, tạm dừng các lượt đang
 
 Chọn **Default download folder / Thư mục tải mặc định** trong Settings, hoặc nhấn **Change / Đổi** trong Downloads. Mặc định là `Downloads` bên trong thư mục Managed mods; mỗi file có thư mục riêng để tránh ghi đè. Thư mục tùy chọn được nhớ sau khi mở lại app. ZIP hợp lệ được giải nén ngay cạnh file nén trong thư mục tải và đăng ký vào **Managed mods**, giữ nguyên file nén và link/metadata Nexus; mod được thêm ở trạng thái chưa bật trong game. Nếu nhập lỗi, archive vẫn được giữ để thử nhập lại mà không tải lại.
 
-Các gói Nexus đã tải nhưng chưa nhập được (RAR/7z hoặc ZIP không có mod hợp lệ) vẫn hiện trong **Managed mods** dưới dạng **Downloaded archive / Gói đã tải**, có thumbnail, metadata, tag và nút mở thư mục. Danh sách được đọc lại từ file và metadata đã lưu trong nguồn thư mục nên vẫn có sau khi mở lại app, kể cả khi hàng đợi tải đã hết. Trạng thái **Not installed / Chưa cài vào game** phân biệt gói lưu trữ với mod có thể bật/tắt. Khi có mod được nhận diện trong thư mục của gói, app dùng các bản ghi mod đó để tránh liệt kê trùng archive. Sau khi giải nén, chỉ thư mục có `mod_manifest.json` mới nhập được bằng Add mod; gói PAK/UCAS/UTOC cũ cần cách cài đặt tương thích và lựa chọn đúng biến thể.
+Các gói Nexus đã tải nhưng chưa nhập được (RAR/7z hoặc ZIP không có mod hợp lệ) vẫn hiện trong **Managed mods** dưới dạng **Downloaded archive / Gói đã tải**, có thumbnail, metadata, tag và nút mở thư mục. Danh sách được đọc lại từ file và metadata đã lưu trong nguồn thư mục nên vẫn có sau khi mở lại app, kể cả khi hàng đợi tải đã hết. Trạng thái **Not installed / Chưa cài vào game** phân biệt gói lưu trữ với mod có thể bật/tắt. Khi có mod được nhận diện trong thư mục của gói, app dùng các bản ghi mod đó để tránh liệt kê trùng archive. Nút **Install / Cài đặt** trong bảng chi tiết cài gói ZIP/7z/RAR: mod có `mod_manifest.json` vào thư viện, file PAK/UCAS/UTOC cũ được chép vào `~mods` ở trạng thái tắt (xem phần PAK cũ bên dưới).
 
 
 Việc tải có xác thực thật chưa được kiểm chứng bằng tài khoản Nexus của người dùng. Kiểm tra tự động hiện bao phủ cấu trúc endpoint, tách thông tin xác thực khỏi dữ liệu gửi lên giao diện, và từ chối mirror không thuộc miền Nexus được hỗ trợ.
@@ -87,7 +87,7 @@ Card mod hiển thị nguồn **Nexus Mods**, **CurseForge**, tên website hoặ
 
 Trong **Settings**, nhập **CurseForge API key**, riêng với Nexus. Key cần quyền truy cập inZOI, được lưu trong kho thông tin xác thực của hệ điều hành; nút **Open CurseForge developer console** mở trang đăng ký key. App không kèm key bí mật. Chi tiết yêu cầu truy cập và endpoint theo [API chính thức CurseForge](https://docs.curseforge.com/rest-api/).
 
-Mở **Downloads**, dán link `https://www.curseforge.com/inzoi/mods/<slug>/files/<fileId>` để tải đúng file, hoặc link trang mod để dùng file chính/mới nhất do API trả về. Popup ghi rõ CurseForge và nơi lưu trước khi xác nhận. Dùng chung hàng đợi, tiến độ, huỷ, thử lại và tự nhập ZIP ở trạng thái tắt; RAR/7z vẫn giữ dưới dạng gói tải để giải nén thủ công. API từ chối tải hoặc tác giả không cho phân phối sẽ báo lỗi kèm nút mở trang gốc.
+Mở **Downloads**, dán link `https://www.curseforge.com/inzoi/mods/<slug>/files/<fileId>` để tải đúng file, hoặc link trang mod để dùng file chính/mới nhất do API trả về. Popup ghi rõ CurseForge và nơi lưu trước khi xác nhận. Dùng chung hàng đợi, tiến độ, huỷ, thử lại và tự cài ZIP/7z/RAR ở trạng thái tắt. API từ chối tải hoặc tác giả không cho phân phối sẽ báo lỗi kèm nút mở trang gốc.
 
 Các file lưu riêng theo nguồn để tránh trùng ID với Nexus:
 
@@ -165,7 +165,7 @@ Nexus Premium có thể tải cập nhật trực tiếp. Với tài khoản mi�
 - Công tắc trên từng mod và nút trong bảng chi tiết dùng chung thao tác. Bật sẽ sao chép bản triển khai vào game; tắt chuyển bản triển khai ra khỏi Mods và giữ bản thư viện. Mod mới nhập mặc định tắt.
 - Mod có sẵn trong game tự được sao lưu vào **Managed mods folder** do người dùng cấu hình trước khi tắt hoặc xoá. Bản triển khai có dấu quyền sở hữu được ẩn khỏi danh sách để tránh trùng với bản thư viện. Mỗi ProjectName chỉ được bật một phiên bản.
 - Mod từ nguồn thư mục bổ sung được quản lý tại chỗ khi thao tác lần đầu, giữ cách chia thư mục hiện có. Tắt vẫn giữ file tại nguồn đó; không cần Tiếp nhận quản lý hay Sao chép vào thư viện thủ công.
-- **Xoá mod** hỏi xác nhận, dùng được cả khi đang bật và đưa file vào `.trash` để phục hồi. Bản đang trong game được chuyển ra khỏi Mods. Gói tải RAR/7z chưa cài cũng xoá được; công tắc chỉ xuất hiện cho mod có manifest hợp lệ.
+- **Xoá mod** hỏi xác nhận rồi đưa file vào Thùng rác của hệ điều hành, kể cả bản triển khai do app quản lý trong game, bộ PAK cũ và gói tải chưa cài. Công tắc bật/tắt xuất hiện cho mod có manifest hợp lệ.
 
 ## Hiển thị mod
 
@@ -173,7 +173,7 @@ Nhấn **Quét mod trên máy** ở đầu thư viện hoặc tab **Source folde
 
 Kết quả hiển thị đường dẫn, nguồn, số mod và tên mod mẫu. Chọn nguồn rồi nhấn **Thêm nguồn đã chọn** để ghi nhớ vị trí, không di chuyển file; các nguồn đã thêm được đánh dấu, nguồn tắt quét thư mục con có thể chọn để bật lại. Lỗi quyền đọc, đường dẫn Vortex không còn tồn tại và giới hạn quét được hiển thị. Quét nhanh giới hạn mỗi nguồn ở 150.000 mục và 32 cấp thư mục. **Quét tất cả ổ đĩa** bỏ giới hạn số mục và độ sâu, quét các ổ cục bộ/USB có ký tự ổ đĩa do Windows trả về. Có tiến độ, đường dẫn đang đọc và nút dừng giữ kết quả một phần. Bỏ qua liên kết/junction, thư mục phục hồi, node_modules, .git, thùng rác và System Volume Information; lỗi quyền đọc vẫn được báo. Ổ mạng chọn riêng bằng Quét thư mục.
 
-Tính năng nhận diện mod có `mod_manifest.json`, gồm cả bản chưa triển khai trong staging. Chưa nhập profile hay trạng thái bật/tắt của Vortex; PAK/UE4SS cũ chưa được hỗ trợ. ZIP/7z/RAR trong nguồn tải inZOI đã xác minh của Vortex, hoặc có sidecar Nexus ghi game inZOI, hiện riêng dưới Gói tải từ Nexus. ZIP chỉ nhập khi người dùng nhấn Nhập ZIP; 7z/RAR mở thư mục để giải nén thủ công. Tránh quản lý cùng mod trong cả hai app cùng lúc. Đã thử bộ quét chỉ đọc trên máy Windows hiện tại và tìm thấy 43 mod trong thư mục game; đường dẫn staging Vortex ghi trong file triển khai hiện không còn tồn tại nên được báo cảnh báo. Kiểm thử tự động dùng staging tạm để xác minh đường dẫn tùy chỉnh và bảo toàn dữ liệu gốc; chưa xác minh với staging Vortex inZOI thật còn đầy đủ.
+Tính năng nhận diện mod có `mod_manifest.json`, gồm cả bản chưa triển khai trong staging. Chưa nhập profile hay trạng thái bật/tắt của Vortex; gói UE4SS chưa được hỗ trợ. ZIP/7z/RAR trong nguồn tải inZOI đã xác minh của Vortex, hoặc có sidecar Nexus ghi game inZOI, hiện riêng dưới Gói tải từ Nexus. Gói nén chỉ được cài khi người dùng nhấn Cài đặt. Tránh quản lý cùng mod trong cả hai app cùng lúc. Đã thử bộ quét chỉ đọc trên máy Windows hiện tại và tìm thấy 43 mod trong thư mục game; đường dẫn staging Vortex ghi trong file triển khai hiện không còn tồn tại nên được báo cảnh báo. Kiểm thử tự động dùng staging tạm để xác minh đường dẫn tùy chỉnh và bảo toàn dữ liệu gốc; chưa xác minh với staging Vortex inZOI thật còn đầy đủ.
 
 Trong **Settings → Managed mods folder**, chọn thư mục có sẵn rồi bật/tắt **Scan subfolders / Quét cả thư mục con** trong phần **Managed mods folder**. Lưu cài đặt sẽ nhận diện mod tại thư mục đó, giữ file tại chỗ và ghi nhận vào Managed mods. Quét lại không tạo bản ghi trùng; khi đổi thư mục hoặc tắt quét thư mục con, các mod đã quản lý vẫn được giữ. Mod mới nhận diện mặc định chưa triển khai vào game. Tùy chọn này không điều khiển quét thư mục game. Add mod vẫn có lựa chọn phạm vi trước khi nhập bản sao; nhập ZIP tự tìm mod trong gói.
 
@@ -248,3 +248,14 @@ Nếu đường tải GitHub Releases không trả được `latest.json` (ví d
 Theo [mã nguồn staging của Vortex](https://github.com/Nexus-Mods/Vortex/blob/master/src/renderer/src/extensions/mod_management/util/getInstallPath.ts), mặc định staging là `{USERDATA}/inzoi/mods`. Theo [mã nguồn downloads](https://github.com/Nexus-Mods/Vortex/blob/master/src/renderer/src/extensions/download_management/util/getDownloadPath.ts), gói tải inZOI nằm trong `{USERDATA}/downloads/inzoi`; đường dẫn tùy chỉnh lấy từ `settings.mods.installPath.inzoi` và `settings.downloads.path`. App đọc dữ liệu Roaming/Local/ProgramData hiện có, rồi duyệt toàn ổ để tìm nguồn đã chuyển, dữ liệu Vortex của tài khoản khác, marker `__vortex_staging_folder` có `game: inzoi` và file triển khai.
 
 Kết quả toàn ổ nhóm theo staging đã xác minh hoặc đúng thư mục mod tìm được; không gắn cả ổ C:/D: thành nguồn quét tự động mỗi lần mở thư viện. Bản quét có thể dừng và thêm nguồn đã tìm được. Kiểm tra chỉ đọc trên Windows đã liệt kê 13 ổ cục bộ/USB và xác minh dừng sau 10 giây; đây là kiểm tra luồng quét/dừng, không phải xác nhận đã quét xong toàn máy.
+
+## Mod PAK cũ và inZOI Mod Enabler
+
+Mod inZOI kiểu cũ là các file `.pak` rời (kèm `.utoc`, `.ucas`, đôi khi `.sig`) đặt trong `BlueClient/Content/Paks/~mods`. Game chỉ nạp chúng khi đã cài **inZOI Mod Enabler** (`dsound.dll` và các file đi kèm trong `BlueClient/Binaries/Win64`).
+
+- Đặt **Settings → Thư mục PAK cũ (~mods)**; nút **Detect** tự tìm bản cài Steam/Epic.
+- Mod PAK cũ nằm trong nhóm riêng **Mod PAK cũ** ở thanh bên, tách khỏi **Tất cả mod**. Nhóm này cho biết đã có Mod Enabler hay chưa và có nút tải từ [trang Nexus](https://www.nexusmods.com/inzoi/mods/1) ("InZOI Mod Enabler (Engine Next)").
+- Cài một gói nén, hoặc chọn thư mục chứa PAK rời bằng **Add mod**, sẽ chép từng bộ PAK vào `~mods/<tên gói>/`. File được thêm hậu tố `_disabled` nên các biến thể trong cùng gói không bị nạp cùng lúc; bật bản bạn muốn trong thư viện. Không bao giờ ghi đè PAK trùng tên đã có.
+- Muốn chạy một mod đã tải qua `~mods` thay vì thư viện, dùng **Cài vào Mod PAK cũ** trên gói nén đó (bảng chi tiết hoặc chuột phải). File `.pak/.utoc/.ucas` được chép vào `~mods` kể cả khi gói có `mod_manifest.json`.
+- Gói chứa Mod Enabler chỉ được cài vào thư mục game sau khi bạn xác nhận; file bị thay thế được giữ trong `Content/.inzoimm-trash`. Nút **Cài Mod Enabler…** trong Settings hoặc thông báo ở thư viện làm việc tương tự với gói bạn chọn.
+- Đóng inZOI trước khi cài hoặc bật/tắt mod PAK vì game khóa các file đã nạp.

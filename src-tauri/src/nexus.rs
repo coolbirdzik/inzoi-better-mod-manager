@@ -257,10 +257,7 @@ async fn download_file(
     root: &Path,
 ) -> Result<DownloadResult> {
     if let Some((path, bytes)) = download_storage::cached_file(root, &request.info)? {
-        let can_import = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case("zip"));
+        let can_import = archives::supported(&path);
         return Ok(DownloadResult {
             path: path.to_string_lossy().into_owned(),
             bytes,
@@ -356,7 +353,7 @@ async fn download_file(
         pending,
         record,
         app,
-        extension == "zip",
+        ["zip", "7z", "rar"].contains(&extension.as_str()),
     )
     .await
 }
@@ -557,7 +554,7 @@ mod tests {
         assert!(archive.is_file());
         let id = m.id.clone();
         drop(store);
-        remove_mod_core(id, &state).unwrap();
+        crate::lifecycle_tests::remove_with_mock_trash(id, &state).unwrap();
         assert!(archive.is_file());
         assert!(state.store.lock().unwrap().mods.is_empty());
         fs::remove_dir_all(root).unwrap();

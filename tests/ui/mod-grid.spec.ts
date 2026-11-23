@@ -3,19 +3,31 @@ import {test, expect, type Page} from '@playwright/test';
 async function library(page:Page) {
  await page.addInitScript(()=>{
   const w=window as any;w.isTauri=true;w.calls=[];let callback=0;
+  const settings={mods_dir:'C:/Mods',library_dir:'C:/library',staging_dir:''};
   const mods=Array.from({length:12},(_,i)=>({id:`mod-${i}`,name:`Collection ${i+1}`,author:`Creator ${i+1}`,project:`Project_${i}`,version:'1.0',description:`Description ${i+1}`,path:`C:/Mods/${i}`,thumbnail:i===0?'preview.png':i===1?'broken.png':i===3?'https://media.forgecdn.net/avatars/mod.jpg':null,managed:i!==2,enabled:i%2===0,source:''}));
   w.__TAURI_INTERNALS__={transformCallback:()=>++callback,convertFileSrc:(path:string)=>`/test-images/${path}`,invoke:async(cmd:string,args:any)=>{
    if(cmd==='load_nexus_api_key'||cmd==='load_curseforge_api_key')return 'TEST_KEY';
    w.calls.push({cmd,args});
-   if(cmd==='snapshot')return {mods,settings:{mods_dir:'C:/Mods',library_dir:'C:/library'},warnings:[]};
+   if(cmd==='snapshot')return {mods,settings,warnings:[]};
    if(cmd==='pending_links')return [];
    if(cmd==='is_portable')return true;
    if(cmd==='update_portable')return false;
-   if(cmd==='plugin:dialog|open')return 'C:/Pictures/custom.png';
+   if(cmd==='plugin:dialog|open')return args.options?.directory?'D:/Mod work':'C:/Pictures/custom.png';
    if(cmd==='plugin:dialog|message')return args.buttons.OkCancelCustom[w.cancelRemoval?1:0];
    if(cmd==='remove_mod'){mods.splice(mods.findIndex(m=>m.id===args.id),1);return;}
    if(cmd==='set_mod_thumbnail'){mods.find(m=>m.id===args.id)!.thumbnail='custom.png';return;}
-   if(cmd==='set_mod_enabled'){const mod=mods.find(m=>m.id===args.id)!;if(w.failToggle)throw new Error('Cannot change activation');mod.enabled=args.enabled;return mod.id;}
+   if(cmd==='set_mod_enabled'){
+    if(w.pauseToggle)await new Promise<void>(resolve=>{w.releaseToggle=resolve});
+    const mod=mods.find(m=>m.id===args.id)!;
+    if(w.failToggle)throw new Error('Cannot change activation');
+    mod.enabled=args.enabled;
+    return mod.id;
+   }
+   if(cmd==='save_settings'){
+    if(w.pauseSave)await new Promise<void>(resolve=>{w.releaseSave=resolve});
+    Object.assign(settings,args.settings);
+    return;
+   }
    return null;
   }};
  });
@@ -164,9 +176,59 @@ test('deleting an enabled mod confirms once and cancel preserves it',async({page
 });
 
 test('failed activation keeps switch state and shows the error',async({page})=>{
- await library(page);await page.evaluate(()=>{(window as any).failToggle=true});
+ await library(page);await page.evaluate(()=>{(window as any).pauseToggle=true;(window as any).failToggle=true});
  const control=page.getByRole('switch').first();await control.click();
+ const progress=page.getByRole('progressbar',{name:/Disabling.*Collection 1/});
+ await expect(progress).toBeVisible();
+ await expect(control).toHaveAttribute('aria-checked','true');
+ await expect(control).toBeDisabled();
+ await page.evaluate(()=>(window as any).releaseToggle());
+ await expect(progress).toHaveCount(0);
  await expect(page.getByRole('alert')).toContainText('Cannot change activation');
  await expect(control).toHaveAttribute('aria-checked','true');
  await expect(control).toBeEnabled();
+});
+
+test('activation progress animates without moving the library or inspector',async({page})=>{
+ await page.setViewportSize({width:900,height:600});
+ await library(page);
+ const list=page.locator('.mod-list');
+ const inspector=page.locator('.inspector-panel');
+ const positions=async()=>Promise.all([list.boundingBox(),inspector.boundingBox()]);
+ const before=await positions();
+ await page.evaluate(()=>{(window as any).pauseToggle=true});
+ const control=page.getByRole('switch').first();
+ await control.click();
+ const progress=page.getByRole('progressbar',{name:/Disabling.*Collection 1/});
+ await expect(progress).toHaveCSS('opacity','1');
+ expect(await positions()).toEqual(before);
+ const transform=()=>progress.evaluate(bar=>getComputedStyle(bar,'::before').transform);
+ const firstFrame=await transform();
+ await expect.poll(transform).not.toBe(firstFrame);
+ await page.emulateMedia({reducedMotion:'reduce'});
+ expect(await progress.evaluate(bar=>getComputedStyle(bar,'::before').animationName)).toBe('none');
+ await page.evaluate(()=>(window as any).releaseToggle());
+ await expect(progress).toHaveCount(0);
+ await expect(control).toHaveAttribute('aria-checked','false');
+ expect(await positions()).toEqual(before);
+});
+
+test('selecting a staging location shows migration progress and saves the folder',async({page})=>{
+ await library(page);
+ await page.evaluate(()=>{(window as any).pauseSave=true});
+ await page.getByRole('button',{name:'Settings',exact:true}).click();
+ const field=page.getByRole('textbox',{name:'Staging location',exact:true});
+ await expect(field).toHaveValue('');
+ await page.getByRole('button',{name:'Staging location',exact:true}).click();
+ await expect(field).toHaveValue('D:/Mod work');
+ const before=await field.boundingBox();
+ await page.getByRole('button',{name:'Save settings',exact:true}).click();
+ const progress=page.getByRole('progressbar',{name:'Moving staging files…'});
+ await expect(progress).toHaveCSS('opacity','1');
+ await expect(field).toBeDisabled();
+ expect(await field.boundingBox()).toEqual(before);
+ await page.evaluate(()=>(window as any).releaseSave());
+ await expect(progress).toHaveCount(0);
+ await page.getByRole('button',{name:'Settings',exact:true}).click();
+ await expect(field).toHaveValue('D:/Mod work');
 });

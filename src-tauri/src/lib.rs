@@ -1,6 +1,7 @@
 mod portable;
 pub use portable::apply_from_cli;
 mod app_updates;
+mod archives;
 mod credentials;
 mod curseforge;
 mod discovery;
@@ -13,6 +14,8 @@ mod library;
 mod metadata;
 mod mod_updates;
 mod nexus;
+mod recycle_bin;
+mod staging;
 mod thumbnails;
 mod update_check_log;
 use serde::{Deserialize, Serialize};
@@ -76,6 +79,9 @@ pub struct Settings {
     source_dirs: Vec<SourceFolder>,
     #[serde(default)]
     downloads_dir: String,
+    /// Parent of the app-owned staging directory; empty uses the Mods parent.
+    #[serde(default)]
+    staging_dir: String,
     /// inZOI `Content/Paks/~mods`, home of legacy PAK mods. Empty disables them.
     #[serde(default)]
     paks_dir: Option<String>,
@@ -151,6 +157,11 @@ struct Snapshot {
     settings: Settings,
     mods: Vec<Mod>,
     warnings: Vec<String>,
+    /// Whether the inZOI Mod Enabler is in the game folder; `None` when no
+    /// `~mods` folder is configured.
+    mod_enabler: Option<bool>,
+    /// inZOI installation folder derived from the `~mods` folder.
+    game_dir: Option<String>,
 }
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
@@ -440,6 +451,8 @@ fn snapshot(app: tauri::AppHandle, state: tauri::State<State>) -> Result<Snapsho
         }
     }
     Ok(Snapshot {
+        mod_enabler: legacy::enabler_installed(&s.settings),
+        game_dir: legacy::game_dir(&s.settings),
         settings: s.settings.clone(),
         mods,
         warnings,
@@ -529,6 +542,7 @@ fn save_settings_core(settings: Settings, state: &State) -> Result<()> {
         return Err("Disable managed mods before changing the game mod folder".into());
     }
     let old = s.settings.clone();
+    let staging_move = staging::relocate(&old, &settings)?;
     let old_mods = s.mods.clone();
     if s.settings.library_dir != settings.library_dir {
         let previous_root = s.settings.library_dir.clone();
@@ -548,7 +562,15 @@ fn save_settings_core(settings: Settings, state: &State) -> Result<()> {
     if let Err(e) = write_store(&state, &s) {
         s.settings = old;
         s.mods = old_mods;
+        if let Some(staging_move) = staging_move {
+            staging_move
+                .rollback()
+                .map_err(|rollback| format!("Could not save settings: {e}. {rollback}"))?;
+        }
         return Err(e);
+    }
+    if let Some(staging_move) = staging_move {
+        staging_move.finish();
     }
     Ok(())
 }
@@ -801,8 +823,8 @@ fn manage_catalogue_mod(id: String, state: &State) -> Result<String> {
 
 fn set_mod_enabled_core(id: String, enabled: bool, state: &State) -> Result<String> {
     if legacy::is_id(&id) {
-        let paks = state.store.lock().map_err(err)?.settings.paks().to_string();
-        legacy::set_enabled(Path::new(&paks), &id, enabled)?;
+        let s = state.store.lock().map_err(err)?;
+        legacy::set_enabled(Path::new(s.settings.paks()), &id, enabled)?;
         return Ok(id);
     }
     let id = manage_catalogue_mod(id, state)?;
@@ -886,38 +908,29 @@ fn set_managed_enabled(id: String, enabled: bool, state: &State) -> Result<()> {
             );
         }
         fs::create_dir_all(target.parent().ok_or("Missing target parent")?).map_err(err)?;
-        let root = PathBuf::from(&s.settings.mods_dir)
-            .canonicalize()
-            .map_err(err)?;
-        let staging = root
-            .parent()
-            .ok_or("Mod folder has no parent")?
-            .join(".inzoimm-staging");
-        fs::create_dir_all(&staging).map_err(err)?;
-        let temp = staging.join(uuid::Uuid::new_v4().to_string());
-        let prepared = (|| {
-            copy_tree(Path::new(&m.path), &temp)?;
-            enable_manifest(&temp)?;
-            fs::write(temp.join(".inzoimm-owner"), &m.id).map_err(err)?;
-            fs::rename(&temp, &target).map_err(err)
-        })();
-        if let Err(e) = prepared {
+        let temp = staging::prepare_deployment(&s.settings, &m)?;
+        if let Err(e) = fs::rename(&temp, &target) {
             let _ = fs::remove_dir_all(&temp);
-            return Err(e);
+            return Err(err(e));
         }
         s.mods[pos].enabled = true;
         if let Err(e) = write_store(&state, &s) {
             s.mods[pos].enabled = m.enabled;
-            let _ = fs::rename(&target, &temp);
+            if let Err(rollback) = fs::rename(&target, &temp) {
+                return Err(format!(
+                    "Could not save activation: {e}. Could not remove deployment: {rollback}"
+                ));
+            }
+            let _ = fs::remove_dir_all(&temp);
             return Err(e);
         }
     }
     Ok(())
 }
-fn remove_mod_core(id: String, state: &State) -> Result<()> {
+fn remove_mod_core(id: String, state: &State, recycle: impl Fn(&Path) -> Result<()>) -> Result<()> {
     if legacy::is_id(&id) {
-        let paks = state.store.lock().map_err(err)?.settings.paks().to_string();
-        return legacy::remove(Path::new(&paks), &id);
+        let s = state.store.lock().map_err(err)?;
+        return legacy::remove(Path::new(s.settings.paks()), &id, recycle);
     }
     {
         let s = state.store.lock().map_err(err)?;
@@ -937,19 +950,24 @@ fn remove_mod_core(id: String, state: &State) -> Result<()> {
             if !source.starts_with(&root) || source == root || !source.is_file() {
                 return Err("Archive containment check failed".into());
             }
-            let sidecar =
-                metadata::download_sidecar(source.parent().ok_or("Missing archive parent")?);
-            let trash = root.join(".trash").join(uuid::Uuid::new_v4().to_string());
-            fs::create_dir_all(&trash).map_err(err)?;
-            let dest = trash.join(source.file_name().ok_or("Missing archive filename")?);
-            fs::rename(&source, &dest).map_err(err)?;
-            if let Err(error) = fs::rename(
-                &sidecar,
-                trash.join(sidecar.file_name().ok_or("Missing download record name")?),
-            ) {
-                let _ = fs::rename(&dest, &source);
-                return Err(err(error));
+            let parent = source.parent().ok_or("Missing archive parent")?;
+            let sidecar = metadata::download_sidecar(parent);
+            let siblings = fs::read_dir(parent)
+                .map_err(err)?
+                .take(3)
+                .map(|entry| entry.map(|entry| entry.path()))
+                .collect::<std::io::Result<Vec<_>>>()
+                .map_err(err)?;
+            // Keep the archive and its record together when they own the whole folder.
+            if parent != root
+                && siblings.len() == 2
+                && siblings.contains(&source)
+                && siblings.contains(&sidecar)
+            {
+                return recycle(parent);
             }
+            recycle(&source)?;
+            recycle(&sidecar)?;
             return Ok(());
         }
     }
@@ -982,54 +1000,49 @@ fn remove_mod_core(id: String, state: &State) -> Result<()> {
     }) {
         return Err("This folder contains another managed mod; remove the nested mod first".into());
     }
-    let trash = root.join(".trash");
-    fs::create_dir_all(&trash).map_err(err)?;
     let deployed = deployment_target(&s.settings, &m)?;
-    let mut deployed_backup = None;
-    if deployed.exists()
-        && (m.enabled
-            || m.deployed_path.is_some()
-            || fs::read_to_string(deployed.join(".inzoimm-owner"))
-                .ok()
-                .as_deref()
-                == Some(m.id.as_str()))
-    {
-        if fs::read_to_string(deployed.join(".inzoimm-owner"))
-            .ok()
-            .as_deref()
-            != Some(m.id.as_str())
-        {
-            return Err(
-                "A deployment without matching ownership exists; removal was cancelled".into(),
-            );
-        }
-        let game_root = PathBuf::from(&s.settings.mods_dir)
-            .canonicalize()
-            .map_err(err)?;
-        let recovery = game_root
-            .parent()
-            .ok_or("Missing Mods parent")?
-            .join(".inzoimm-disabled");
-        fs::create_dir_all(&recovery).map_err(err)?;
-        let backup = recovery.join(uuid::Uuid::new_v4().to_string());
-        fs::rename(&deployed, &backup).map_err(|e| move_deployed_error(e, &m, &deployed))?;
-        deployed_backup = Some((deployed, backup));
+    let owner = deployed.join(".inzoimm-owner");
+    let owned = fs::read_to_string(&owner).ok().as_deref() == Some(m.id.as_str());
+    let remove_deployed =
+        deployed.try_exists().map_err(err)? && (m.enabled || m.deployed_path.is_some() || owned);
+    if remove_deployed && !owned {
+        return Err("A deployment without matching ownership exists; removal was cancelled".into());
     }
-    let dest = trash.join(uuid::Uuid::new_v4().to_string());
-    if let Err(e) = fs::rename(&source, &dest) {
-        if let Some((original, backup)) = &deployed_backup {
-            let _ = fs::rename(backup, original);
-        }
-        return Err(err(e));
-    }
+
+    // A failed store write must leave both original paths available for retry.
     s.mods.remove(pos);
-    if let Err(e) = write_store(&state, &s) {
+    if let Err(error) = write_store(state, &s) {
         s.mods.insert(pos, m);
-        let _ = fs::rename(dest, source);
-        if let Some((original, backup)) = deployed_backup {
-            let _ = fs::rename(backup, original);
+        return Err(error);
+    }
+
+    let result = (|| {
+        if remove_deployed {
+            // Restoring from the OS should not leave an orphaned ownership marker.
+            fs::remove_file(&owner).map_err(|e| move_deployed_error(e, &m, &deployed))?;
+            if let Err(error) = recycle(&deployed) {
+                if !matches!(deployed.try_exists(), Ok(false)) {
+                    fs::write(&owner, &m.id).map_err(|restore_error| {
+                        format!("{error}. Could not restore deployment ownership: {restore_error}")
+                    })?;
+                }
+                return Err(error);
+            }
         }
-        return Err(e);
+        recycle(&source)
+    })();
+    if let Err(error) = result {
+        if !matches!(source.try_exists(), Ok(false)) {
+            let mut m = m;
+            if matches!(deployed.try_exists(), Ok(false)) {
+                m.enabled = false;
+            }
+            s.mods.insert(pos, m);
+            write_store(state, &s).map_err(|save_error| {
+                format!("{error}. Could not save the remaining mod: {save_error}")
+            })?;
+        }
+        return Err(error);
     }
     Ok(())
 }
@@ -1061,8 +1074,22 @@ fn import_folder(
     path: String,
     scan_subfolders: Option<bool>,
     state: tauri::State<State>,
-) -> Result<()> {
-    import_folder_with_options(path, scan_subfolders.unwrap_or(true), &state)
+) -> Result<archives::InstallReport> {
+    import_any_folder(path, scan_subfolders.unwrap_or(true), &state)
+}
+/// Folders with `mod_manifest.json` go to the library; folders of loose
+/// legacy PAK files are installed into `~mods`.
+fn import_any_folder(
+    path: String,
+    recursive: bool,
+    state: &State,
+) -> Result<archives::InstallReport> {
+    let src = PathBuf::from(&path).canonicalize().map_err(err)?;
+    if src.is_dir() && scan_with_options(&src, recursive).0.is_empty() {
+        return archives::install_folder(&path, recursive, state);
+    }
+    import_folder_with_options(path, recursive, state)?;
+    Ok(archives::InstallReport::imported(1))
 }
 #[tauri::command(async)]
 fn toggle_mod(id: String, state: tauri::State<State>) -> Result<()> {
@@ -1074,7 +1101,7 @@ fn set_mod_enabled(id: String, enabled: bool, state: tauri::State<State>) -> Res
 }
 #[tauri::command(async)]
 fn remove_mod(id: String, state: tauri::State<State>) -> Result<()> {
-    remove_mod_core(id, &state)
+    remove_mod_core(id, &state, recycle_bin::send)
 }
 fn adopt_mod_core(path: String, state: &State) -> Result<()> {
     let mut s = state.store.lock().map_err(err)?;
@@ -1179,46 +1206,58 @@ fn extract_zip(source: &Path, dest: &Path) -> Result<()> {
     }
     Ok(())
 }
+/// Installs a chosen ZIP, 7z or RAR archive. `enabler` confirms writing the
+/// inZOI Mod Enabler into the game folder when the archive contains it.
 #[tauri::command(async)]
-fn import_zip(path: String, state: tauri::State<State>) -> Result<()> {
-    import_zip_core(&path, &state)
+fn import_zip(
+    path: String,
+    enabler: Option<bool>,
+    legacy: Option<bool>,
+    state: tauri::State<State>,
+) -> Result<archives::InstallReport> {
+    archives::install_archive_as(
+        &path,
+        &state,
+        None,
+        enabler.unwrap_or(false),
+        legacy.unwrap_or(false),
+    )
 }
-fn import_zip_core(path: &str, state: &State) -> Result<()> {
-    import_archive(path, state, None)
-}
+/// Installs a downloaded archive; library mods are unpacked beside it.
+/// `legacy` installs the package's PAK files into `~mods` instead.
 #[tauri::command(async)]
-fn import_download(path: String, state: tauri::State<State>) -> Result<()> {
-    import_download_core(&path, &state)
+fn import_download(
+    path: String,
+    enabler: Option<bool>,
+    legacy: Option<bool>,
+    state: tauri::State<State>,
+) -> Result<archives::InstallReport> {
+    import_download_with(
+        &path,
+        enabler.unwrap_or(false),
+        legacy.unwrap_or(false),
+        &state,
+    )
 }
-fn import_download_core(path: &str, state: &State) -> Result<()> {
+#[cfg(test)]
+fn import_download_core(path: &str, state: &State) -> Result<archives::InstallReport> {
+    import_download_with(path, false, false, state)
+}
+fn import_download_with(
+    path: &str,
+    enabler: bool,
+    legacy: bool,
+    state: &State,
+) -> Result<archives::InstallReport> {
     let archive = Path::new(path).canonicalize().map_err(err)?;
     let destination = metadata::download_destination(&archive)?;
-    import_archive(&archive.to_string_lossy(), state, Some(destination))
-}
-fn import_archive(
-    path: &str,
-    state: &State,
-    destination: Option<(PathBuf, PathBuf)>,
-) -> Result<()> {
-    let temp = state
-        .file
-        .parent()
-        .ok_or("Missing app data folder")?
-        .join("imports")
-        .join(uuid::Uuid::new_v4().to_string());
-    fs::create_dir_all(&temp).map_err(err)?;
-    let result = extract_zip(Path::new(path), &temp)
-        .and_then(|_| metadata::attach_download(Path::new(path), &temp))
-        .and_then(|_| {
-            import_folder_to_library(
-                temp.to_string_lossy().into_owned(),
-                true,
-                state,
-                destination,
-            )
-        });
-    let cleanup = fs::remove_dir_all(&temp).map_err(err);
-    result.and(cleanup)
+    archives::install_archive_as(
+        &archive.to_string_lossy(),
+        state,
+        Some(destination),
+        enabler,
+        legacy,
+    )
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct NexusLink {
@@ -1287,8 +1326,74 @@ fn parse_nxm(link: String, state: tauri::State<State>) -> Result<NexusLink> {
     Ok(info)
 }
 #[tauri::command]
+fn nxm_handler_registered(_app: tauri::AppHandle) -> Result<Option<bool>> {
+    #[cfg(windows)]
+    {
+        use std::{ffi::OsString, os::windows::ffi::OsStringExt};
+        use windows::{
+            core::{w, HRESULT, PWSTR},
+            Win32::{
+                Foundation::{ERROR_FILE_NOT_FOUND, ERROR_NO_ASSOCIATION},
+                UI::Shell::{
+                    AssocQueryStringW, ASSOCF_IS_PROTOCOL, ASSOCF_NOTRUNCATE, ASSOCSTR_EXECUTABLE,
+                },
+            },
+        };
+
+        let query = |buffer, length: &mut u32| unsafe {
+            AssocQueryStringW(
+                ASSOCF_IS_PROTOCOL | ASSOCF_NOTRUNCATE,
+                ASSOCSTR_EXECUTABLE,
+                w!("nxm"),
+                w!("open"),
+                buffer,
+                length,
+            )
+        };
+        let mut length = 0;
+        let status = query(None, &mut length);
+        if [ERROR_NO_ASSOCIATION, ERROR_FILE_NOT_FOUND]
+            .iter()
+            .any(|error| status == HRESULT::from_win32(error.0))
+        {
+            return Ok(Some(false));
+        }
+        status.ok().map_err(err)?;
+        if length == 0 {
+            return Ok(Some(false));
+        }
+        let mut path = vec![0u16; length as usize];
+        query(Some(PWSTR(path.as_mut_ptr())), &mut length)
+            .ok()
+            .map_err(err)?;
+        let end = path
+            .iter()
+            .position(|&unit| unit == 0)
+            .unwrap_or(path.len());
+        let handler = OsString::from_wide(&path[..end]);
+        let current = tauri::utils::platform::current_exe().map_err(err)?;
+        Ok(Some(library::same_path(
+            &handler.to_string_lossy(),
+            &current.to_string_lossy(),
+        )))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        _app.deep_link().is_registered("nxm").map(Some).map_err(err)
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    Ok(None)
+}
+#[tauri::command]
 fn register_nxm(app: tauri::AppHandle) -> Result<()> {
-    app.deep_link().register("nxm").map_err(err)
+    app.deep_link().register("nxm").map_err(err)?;
+    #[cfg(windows)]
+    unsafe {
+        use windows::Win32::UI::Shell::{SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNF_FLUSH};
+        // Let the Shell refresh its association cache before the UI rechecks the handler.
+        SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_FLUSH, None, None);
+    }
+    Ok(())
 }
 pub fn run() {
     nexus::configure_tls();
@@ -1339,6 +1444,7 @@ pub fn run() {
                         scan_subfolders: true,
                         source_dirs: vec![],
                         downloads_dir: String::new(),
+                        staging_dir: String::new(),
                         paks_dir: None,
                     },
                     mods: vec![],
@@ -1401,6 +1507,7 @@ pub fn run() {
             import_folder,
             import_zip,
             import_download,
+            archives::install_mod_enabler,
             adopt_mod,
             edit_mod,
             toggle_mod,
@@ -1408,6 +1515,7 @@ pub fn run() {
             remove_mod,
             parse_nxm,
             pending_links,
+            nxm_handler_registered,
             register_nxm,
             nexus::download_nxm,
             nexus::cancel_nxm,
@@ -1466,14 +1574,9 @@ mod managed_folder_tests {
             fs::read(source.join("payload.pak")).unwrap(),
             b"original-payload"
         );
-        remove_mod_core(first.id, &state).unwrap();
+        crate::lifecycle_tests::remove_with_mock_trash(first.id, &state).unwrap();
         assert!(!source.exists());
-        let trash = fs::read_dir(library.join(".trash"))
-            .unwrap()
-            .next()
-            .unwrap()
-            .unwrap()
-            .path();
+        let trash = crate::lifecycle_tests::mock_trash_path(&root, &source);
         assert_eq!(
             fs::read(trash.join("payload.pak")).unwrap(),
             b"original-payload"
@@ -1497,7 +1600,7 @@ mod managed_folder_tests {
         save_settings_core(settings, &state).unwrap();
         assert_eq!(state.store.lock().unwrap().mods.len(), 2);
         assert!(Path::new(&old.path).join("payload.pak").exists());
-        remove_mod_core(old.id, &state).unwrap();
+        crate::lifecycle_tests::remove_with_mock_trash(old.id, &state).unwrap();
         assert!(original.join("payload.pak").exists());
         assert!(library.join("NewMod/payload.pak").exists());
         fs::remove_dir_all(root).unwrap();
@@ -1720,6 +1823,28 @@ mod filesystem_tests {
 mod lifecycle_tests {
     use super::*;
     use std::io::Write;
+
+    pub(super) fn mock_trash_path(root: &Path, path: &Path) -> PathBuf {
+        let root = root.canonicalize().unwrap();
+        root.join(".inzoimm-test-trash").join(
+            dunce::simplified(path)
+                .strip_prefix(dunce::simplified(&root))
+                .unwrap(),
+        )
+    }
+
+    pub(super) fn mock_recycle(root: &Path, path: &Path) -> Result<()> {
+        let path = path.canonicalize().map_err(err)?;
+        let dest = mock_trash_path(root, &path);
+        fs::create_dir_all(dest.parent().unwrap()).map_err(err)?;
+        fs::rename(path, dest).map_err(err)
+    }
+
+    pub(super) fn remove_with_mock_trash(id: String, state: &State) -> Result<()> {
+        remove_mod_core(id, state, |path| {
+            mock_recycle(state.file.parent().unwrap(), path)
+        })
+    }
     pub(super) fn fixture() -> (PathBuf, State, PathBuf) {
         let root = std::env::temp_dir().join(format!("inzoimm-lifecycle-{}", uuid::Uuid::new_v4()));
         let game = root.join("game/Mods");
@@ -1743,6 +1868,7 @@ mod lifecycle_tests {
                     scan_subfolders: true,
                     source_dirs: vec![],
                     downloads_dir: String::new(),
+                    staging_dir: String::new(),
                     paks_dir: None,
                 },
                 mods: vec![],
@@ -1753,7 +1879,7 @@ mod lifecycle_tests {
         (root, state, source)
     }
     #[test]
-    fn adopt_disable_enable_remove_keeps_recovery_copy() {
+    fn adopt_disable_enable_remove_recycles_library_and_deployed_copies() {
         let (root, state, source) = fixture();
         adopt_mod_core(source.to_string_lossy().into_owned(), &state).unwrap();
         let m = state.store.lock().unwrap().mods[0].clone();
@@ -1763,13 +1889,18 @@ mod lifecycle_tests {
         assert!(!source.exists());
         toggle_mod_core(m.id.clone(), &state).unwrap();
         assert_eq!(fs::read(source.join("payload.pak")).unwrap(), [1, 2, 3, 4]);
-        remove_mod_core(m.id, &state).unwrap();
+        remove_with_mock_trash(m.id, &state).unwrap();
         assert!(!source.exists());
         assert!(state.store.lock().unwrap().mods.is_empty());
+        let trashed_source = mock_trash_path(&root, &source);
         assert_eq!(
-            fs::read_dir(root.join("library/.trash")).unwrap().count(),
-            1
+            fs::read(trashed_source.join("payload.pak")).unwrap(),
+            [1, 2, 3, 4]
         );
+        assert!(!trashed_source.join(".inzoimm-owner").exists());
+        assert!(mock_trash_path(&root, Path::new(&m.path))
+            .join("payload.pak")
+            .exists());
         fs::remove_dir_all(root).unwrap();
     }
     #[cfg(windows)]
@@ -1938,7 +2069,7 @@ mod copied_external_tests {
         fs::rename(&source, &direct).unwrap();
         import_folder_core(direct.to_string_lossy().into_owned(), &state).unwrap();
         let id = state.store.lock().unwrap().mods[0].id.clone();
-        remove_mod_core(id, &state).unwrap();
+        crate::lifecycle_tests::remove_with_mock_trash(id, &state).unwrap();
         assert_eq!(fs::read(direct.join("payload.pak")).unwrap(), [1, 2, 3, 4]);
         assert!(!direct.join(".inzoimm-owner").exists());
         fs::remove_dir_all(root).unwrap();
@@ -1954,18 +2085,10 @@ mod copied_external_tests {
         adopt_mod_core(source.to_string_lossy().into_owned(), &state).unwrap();
         let m = state.store.lock().unwrap().mods[0].clone();
         assert!(!m.enabled);
-        remove_mod_core(m.id, &state).unwrap();
+        crate::lifecycle_tests::remove_with_mock_trash(m.id, &state).unwrap();
         assert!(!source.exists());
-        assert_eq!(
-            fs::read_dir(root.join("game/.inzoimm-disabled"))
-                .unwrap()
-                .count(),
-            1
-        );
-        assert_eq!(
-            fs::read_dir(root.join("library/.trash")).unwrap().count(),
-            1
-        );
+        assert!(crate::lifecycle_tests::mock_trash_path(&root, &source).is_dir());
+        assert!(crate::lifecycle_tests::mock_trash_path(&root, Path::new(&m.path)).is_dir());
         fs::remove_dir_all(root).unwrap();
     }
 }
@@ -2027,17 +2150,12 @@ mod unified_library_tests {
     fn installed_mod_can_be_removed_without_a_separate_adoption_step() {
         let (root, state, source) = super::lifecycle_tests::fixture();
         let external = library::catalogue(&state.store.lock().unwrap()).0.remove(0);
-        remove_mod_core(external.id, &state).unwrap();
+        crate::lifecycle_tests::remove_with_mock_trash(external.id, &state).unwrap();
         assert!(!source.exists());
         assert!(library::catalogue(&state.store.lock().unwrap())
             .0
             .is_empty());
-        let recovered = fs::read_dir(root.join("library/.trash"))
-            .unwrap()
-            .next()
-            .unwrap()
-            .unwrap()
-            .path();
+        let recovered = crate::lifecycle_tests::mock_trash_path(&root, &source);
         assert_eq!(
             fs::read(recovered.join("payload.pak")).unwrap(),
             [1, 2, 3, 4]
@@ -2060,7 +2178,7 @@ mod unified_library_tests {
         let external = library::catalogue(&state.store.lock().unwrap()).0.remove(0);
         let id = set_mod_enabled_core(external.id, true, &state).unwrap();
         assert!(root.join("game/Mods/Hair_ABC").exists());
-        remove_mod_core(id, &state).unwrap();
+        crate::lifecycle_tests::remove_with_mock_trash(id, &state).unwrap();
         assert!(!local.exists());
         assert!(!root.join("game/Mods/Hair_ABC").exists());
         assert!(library::catalogue(&state.store.lock().unwrap())
@@ -2100,15 +2218,12 @@ mod unified_library_tests {
         set_mod_enabled_core(id.clone(), true, &state).unwrap();
         assert!(source.exists());
         assert_eq!(library::catalogue(&state.store.lock().unwrap()).0.len(), 1);
-        remove_mod_core(id, &state).unwrap();
+        crate::lifecycle_tests::remove_with_mock_trash(id, &state).unwrap();
         assert!(!source.exists() && !library_path.exists());
         assert!(library::catalogue(&state.store.lock().unwrap())
             .0
             .is_empty());
-        assert_eq!(
-            fs::read_dir(root.join("library/.trash")).unwrap().count(),
-            1
-        );
+        assert!(crate::lifecycle_tests::mock_trash_path(&root, &library_path).is_dir());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -2151,7 +2266,7 @@ mod unified_library_tests {
         set_mod_enabled_core(id.clone(), false, &state).unwrap();
         assert!(!root.join("game/Mods/Hair_ABC").exists());
         assert_eq!(fs::read(local.join("payload.pak")).unwrap(), [1, 2, 3, 4]);
-        remove_mod_core(id, &state).unwrap();
+        crate::lifecycle_tests::remove_with_mock_trash(id, &state).unwrap();
         assert!(!local.exists());
         let remaining = library::catalogue(&state.store.lock().unwrap()).0;
         assert!(
@@ -2169,10 +2284,38 @@ mod unified_library_tests {
         let m = state.store.lock().unwrap().mods[0].clone();
         fs::remove_file(&state.file).unwrap();
         fs::create_dir(&state.file).unwrap();
-        assert!(remove_mod_core(m.id, &state).is_err());
+        assert!(
+            remove_mod_core(m.id, &state, |_| panic!("store failed before recycling")).is_err()
+        );
         assert!(state.store.lock().unwrap().mods[0].enabled);
         assert_eq!(fs::read(source.join("payload.pak")).unwrap(), [1, 2, 3, 4]);
         assert!(Path::new(&m.path).join("payload.pak").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_library_recycle_keeps_the_catalogued_copy_available_for_retry() {
+        let (root, state, source) = super::lifecycle_tests::fixture();
+        adopt_mod_core(source.to_string_lossy().into_owned(), &state).unwrap();
+        let m = state.store.lock().unwrap().mods[0].clone();
+        let library = Path::new(&m.path);
+        let error = remove_mod_core(m.id.clone(), &state, |path| {
+            if path == library {
+                return Err("mock trash refused library folder".into());
+            }
+            super::lifecycle_tests::mock_recycle(&root, path)
+        })
+        .unwrap_err();
+        assert_eq!(error, "mock trash refused library folder");
+        assert!(!source.exists());
+        assert!(library.join("payload.pak").exists());
+        assert!(!state.store.lock().unwrap().mods[0].enabled);
+        let saved: Store = serde_json::from_slice(&fs::read(&state.file).unwrap()).unwrap();
+        assert_eq!(saved.mods[0].id, m.id);
+        assert!(!saved.mods[0].enabled);
+        super::lifecycle_tests::remove_with_mock_trash(m.id, &state).unwrap();
+        assert!(!library.exists());
+        assert!(state.store.lock().unwrap().mods.is_empty());
         fs::remove_dir_all(root).unwrap();
     }
 }
