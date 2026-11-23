@@ -1826,11 +1826,12 @@ mod lifecycle_tests {
 
     pub(super) fn mock_trash_path(root: &Path, path: &Path) -> PathBuf {
         let root = root.canonicalize().unwrap();
-        root.join(".inzoimm-test-trash").join(
-            dunce::simplified(path)
-                .strip_prefix(dunce::simplified(&root))
-                .unwrap(),
-        )
+        // Assertions also look up paths after the original entry has been moved.
+        let parent = path.parent().unwrap().canonicalize().unwrap();
+        let relative_parent = parent.strip_prefix(&root).unwrap();
+        root.join(".inzoimm-test-trash")
+            .join(relative_parent)
+            .join(path.file_name().unwrap())
     }
 
     pub(super) fn mock_recycle(root: &Path, path: &Path) -> Result<()> {
@@ -1845,6 +1846,26 @@ mod lifecycle_tests {
             mock_recycle(state.file.parent().unwrap(), path)
         })
     }
+    #[cfg(windows)]
+    #[test]
+    fn mock_trash_lookup_accepts_different_directory_casing_after_move() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("Fixture");
+        let source = root.join("mods/Pack");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("payload.pak"), b"mod payload").unwrap();
+
+        mock_recycle(&root, &source).unwrap();
+        assert!(!source.exists());
+
+        let original_path = temp.path().join("FIXTURE/mods/Pack");
+        let recovered = mock_trash_path(&root, &original_path);
+        assert_eq!(
+            fs::read(recovered.join("payload.pak")).unwrap(),
+            b"mod payload"
+        );
+    }
+
     pub(super) fn fixture() -> (PathBuf, State, PathBuf) {
         let root = std::env::temp_dir().join(format!("inzoimm-lifecycle-{}", uuid::Uuid::new_v4()));
         let game = root.join("game/Mods");
